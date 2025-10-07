@@ -1,0 +1,19 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+    height: 100%;
+}
+
+/* React Flow: 選択境界のヒット領域を無効化して、ノードへのドラッグを優先 */
+.react-flow__selection,
+.react-flow__selection-rect,
+.react-flow__nodesselection,
+.react-flow__nodesselection-rect,
+.react-flow__resize-control,
+.react-flow__resize-controls {
+    pointer-events: none;
+}
