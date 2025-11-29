@@ -25,7 +25,7 @@ export const Canvas: React.FC = () => {
     const updateTask = useAppStore((s) => s.updateTask)
     const rf = useReactFlow()
     const historyRef = useRef<any[]>([])
-    const clipboardRef = useRef<any[] | null>(null)
+    const clipboardRef = useRef<{ type: 'subgraph'; nodes: any[] } | null>(null)
     const lastMouseFlowRef = useRef<{ x: number; y: number } | null>(null)
     const dragPosRef = useRef<Record<string, { x: number; y: number }>>({})
     // Shift は無効化（要望）
@@ -370,6 +370,11 @@ export const Canvas: React.FC = () => {
 
                 onEdgeClick={(e, edge) => { (window as any)._selectedEdgeId = edge.id; (window as any)._selectedEdge = edge; e.stopPropagation() }}
                 onNodeDragStart={(_, node) => {
+                    // ボタンクリックからのドラッグを無視
+                    if ((window as any)._preventNodeDrag) {
+                        dragRef.current = null
+                        return
+                    }
                     setDragging(node.id)
                     const rfNodes = rf.getNodes()
                     // 現在の選択群（ドラッグ対象を含むもののみ有効）

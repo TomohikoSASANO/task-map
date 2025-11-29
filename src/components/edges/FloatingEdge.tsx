@@ -27,7 +27,7 @@ export const FloatingEdge: React.FC<EdgeProps> = (props) => {
 
     return (
         <>
-            <BaseEdge path={path} {...props} onClick={(e) => { e.stopPropagation(); (window as any)._selectedEdgeId = props.id; (window as any)._selectedEdge = props }} />
+            <BaseEdge path={path} {...props} />
             {props.data && (props.data as any).dep && (
                 <EdgeLabelRenderer>
                     <div

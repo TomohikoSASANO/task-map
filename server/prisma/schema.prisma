@@ -1,0 +1,151 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  owner
+  editor
+  viewer
+}
+
+enum EdgeType {
+  dependency
+}
+
+model User {
+  id              String   @id @default(cuid())
+  email           String   @unique
+  passwordHash    String?
+  name            String?
+  avatarUrl       String?
+  emailVerifiedAt DateTime?
+  createdAt       DateTime @default(now())
+
+  workspaces      Membership[]
+  ownedWorkspaces Workspace[] @relation("WorkspaceOwner")
+}
+
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  ownerId   String
+  owner     User     @relation("WorkspaceOwner", fields: [ownerId], references: [id])
+  createdAt DateTime @default(now())
+
+  members Membership[]
+  maps    Map[]
+  invites InviteToken[]
+}
+
+model Membership {
+  id           String    @id @default(cuid())
+  workspaceId  String
+  userId       String
+  role         Role
+  createdAt    DateTime  @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+  user      User      @relation(fields: [userId], references: [id])
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+}
+
+model Map {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+  tasks     Task[]
+  edges     Edge[]
+  snapshots Snapshot[]
+
+  @@index([workspaceId])
+}
+
+model Task {
+  id         String   @id @default(cuid())
+  mapId      String
+  title      String
+  assigneeId String?
+  parentId   String?
+  positionX  Float    @default(0)
+  positionY  Float    @default(0)
+  done       Boolean  @default(false)
+  memo       String?
+  deadline   DateTime?
+  expanded   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  map     Map   @relation(fields: [mapId], references: [id])
+  parent  Task? @relation("TaskToChildren", fields: [parentId], references: [id])
+  children Task[] @relation("TaskToChildren")
+
+  // 任意: assigneeIdはUser参照にしても良いが、外部ユーザーも想定しnullableのまま
+
+  outgoingEdges Edge[] @relation("EdgeSource")
+  incomingEdges Edge[] @relation("EdgeTarget")
+
+  @@index([mapId])
+  @@index([assigneeId])
+  @@index([parentId])
+}
+
+model Edge {
+  id           String   @id @default(cuid())
+  mapId        String
+  sourceTaskId String
+  targetTaskId String
+  type         EdgeType @default(dependency)
+  createdAt    DateTime @default(now())
+
+  map    Map  @relation(fields: [mapId], references: [id])
+  source Task @relation("EdgeSource", fields: [sourceTaskId], references: [id])
+  target Task @relation("EdgeTarget", fields: [targetTaskId], references: [id])
+
+  @@unique([mapId, sourceTaskId, targetTaskId])
+  @@index([mapId])
+  @@index([sourceTaskId])
+  @@index([targetTaskId])
+}
+
+model Snapshot {
+  id        String   @id @default(cuid())
+  mapId     String
+  createdBy String?
+  data      Json
+  createdAt DateTime @default(now())
+
+  map Map @relation(fields: [mapId], references: [id])
+
+  @@index([mapId])
+}
+
+model InviteToken {
+  id          String   @id @default(cuid())
+  workspaceId String
+  email       String
+  role        Role
+  tokenHash   String   @unique
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@index([workspaceId])
+  @@index([email])
+}

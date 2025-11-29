@@ -30,9 +30,29 @@ export const TaskNode: React.FC<Props> = ({ id, data }) => {
     const draggingId = useAppStore((s) => s.draggingId)
     const ripples = useAppStore((s) => s.ripples)
     const [memoOpen, setMemoOpen] = useState(false)
+    // タイトル編集中はローカルバッファに保持して、過度な再レンダー/フォーカス喪失を防ぐ
+    const [isEditingTitle, setIsEditingTitle] = useState(false)
+    const [titleDraft, setTitleDraft] = useState<string>(task?.title ?? '')
+    const isComposingRef = useRef(false)
     const memoRef = useRef<HTMLTextAreaElement | null>(null)
+    const toggleHandledRef = useRef<boolean>(false)
 
     useEffect(() => { if (memoOpen && memoRef.current) memoRef.current.focus() }, [memoOpen])
+    // タスク名が外部更新された場合、未編集中のみドラフトを追従
+    useEffect(() => {
+        if (!isEditingTitle) setTitleDraft(task?.title ?? '')
+    }, [task?.title, isEditingTitle])
+    // 編集中は軽いデバウンスでストアにも反映（IME構成中は反映しない）
+    useEffect(() => {
+        if (!isEditingTitle) return
+        if (isComposingRef.current) return
+        const t = setTimeout(() => {
+            if (task && titleDraft !== task.title) {
+                updateTask(id, { title: titleDraft })
+            }
+        }, 180)
+        return () => clearTimeout(t)
+    }, [titleDraft, isEditingTitle])
 
     const isDragging = draggingId === id
     const hasRipple = ripples.some((r) => r.nodeId === id)
@@ -40,7 +60,8 @@ export const TaskNode: React.FC<Props> = ({ id, data }) => {
     const isHighlight = !!data.highlight
     // タスクが削除済みの一時描画タイミングで安全に抜ける（フック呼び出し後に判定）
     if (!task) return null
-    const hasAssignee = !!(task.assigneeId && users[task.assigneeId])
+    const assignee = task.assigneeId ? users[task.assigneeId] : undefined
+    const hasAssignee = !!assignee
     const isDone = !!task.done
     const hasDeps = (task.dependsOn ?? []).length > 0
     const allDepsDone = (task.dependsOn ?? []).every((d) => !!allTasks[d]?.done)
@@ -101,36 +122,81 @@ export const TaskNode: React.FC<Props> = ({ id, data }) => {
             <Ripple active={hasRipple} />
             {/* 上段: 担当者表示 */}
             {/* 担当者アイコンを左上に大きく・最前面で表示（ノード内に収めてパン誤爆防止） */}
-            {hasAssignee && (
+            {hasAssignee && assignee && (
                 <div className="pointer-events-none absolute top-1 left-1 z-30 flex flex-col items-center">
-                    {users[task.assigneeId].avatarUrl ? (
-                        <img src={users[task.assigneeId].avatarUrl!} alt={users[task.assigneeId].name} className="w-8 h-8 rounded-full border object-cover shadow" />
+                    {assignee.avatarUrl ? (
+                        <img src={assignee.avatarUrl!} alt={assignee.name} className="w-8 h-8 rounded-full border object-cover shadow" />
                     ) : (
-                        <span className="inline-block w-8 h-8 rounded-full border shadow" style={{ background: users[task.assigneeId].color }} />
+                        <span className="inline-block w-8 h-8 rounded-full border shadow" style={{ background: assignee.color }} />
                     )}
-                    <span className="mt-0.5 text-[10px] text-slate-700 leading-none bg-white/90 px-1 rounded shadow">{users[task.assigneeId].name}</span>
+                    <span className="mt-0.5 text-[10px] text-slate-700 leading-none bg-white/90 px-1 rounded shadow">{assignee.name}</span>
                 </div>
             )}
-            <div className="flex items-center gap-2 mb-1">
+            <div className="flex items-center gap-2 mb-1" onPointerDown={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
                 <button
-                    className={`w-5 h-5 rounded-full border text-[10px] flex items-center justify-center ${isDone ? 'bg-emerald-500 border-emerald-500 text-white' : 'bg-slate-200 border-slate-300 text-slate-600'}`}
+                    className={`nodrag nopan min-w-[28px] min-h-[28px] w-7 h-7 rounded-full border-2 flex items-center justify-center transition-all hover:scale-110 active:scale-95 cursor-pointer ${isDone ? 'bg-emerald-500 border-emerald-600 text-white' : 'bg-slate-200 border-slate-400 text-slate-600 hover:bg-slate-300'}`}
+                    style={{ fontSize: '14px', pointerEvents: 'auto', touchAction: 'manipulation' }}
                     title={isDone ? '完了' : '未完了'}
                     aria-label="完了切替"
-                    onClick={(e) => { e.stopPropagation(); updateTask(id, { done: !isDone }) }}
+                    onPointerDown={(e) => {
+                        e.stopPropagation()
+                        e.preventDefault()
+                        if (toggleHandledRef.current) return
+                        toggleHandledRef.current = true
+                        ;(window as any)._preventNodeDrag = true
+                        updateTask(id, { done: !isDone })
+                        setTimeout(() => { 
+                            toggleHandledRef.current = false
+                            ;(window as any)._preventNodeDrag = false
+                        }, 300)
+                    }}
+                    onMouseDown={(e) => {
+                        e.stopPropagation()
+                        e.preventDefault()
+                        if (toggleHandledRef.current) return
+                        toggleHandledRef.current = true
+                        ;(window as any)._preventNodeDrag = true
+                        updateTask(id, { done: !isDone })
+                        setTimeout(() => { 
+                            toggleHandledRef.current = false
+                            ;(window as any)._preventNodeDrag = false
+                        }, 300)
+                    }}
+                    onPointerUp={(e) => {
+                        e.stopPropagation()
+                    }}
+                    onMouseUp={(e) => {
+                        e.stopPropagation()
+                    }}
+                    onClick={(e) => {
+                        e.stopPropagation()
+                        e.preventDefault()
+                        if (toggleHandledRef.current) return
+                        toggleHandledRef.current = true
+                        updateTask(id, { done: !isDone })
+                        setTimeout(() => { toggleHandledRef.current = false }, 300)
+                    }}
                 >✓</button>
                 <div className="ml-auto text-[10px] text-slate-500">Lv{data.depth ?? 0}</div>
             </div>
-            {/* タイトル編集 */}
+            {/* タイトル編集（ローカルバッファ + デバウンス同期でフォーカス安定化） */}
             <input
                 className="w-full bg-transparent font-medium outline-none border-b border-transparent focus:border-slate-300 nodrag nopan"
-                value={task.title}
-                onChange={(e) => updateTask(id, { title: e.target.value })}
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onCompositionStart={() => { isComposingRef.current = true }}
+                onCompositionEnd={(e) => { isComposingRef.current = false; setTitleDraft(e.currentTarget.value) }}
                 onPointerDown={(e) => { e.stopPropagation(); }}
                 onMouseDown={(e) => e.stopPropagation()}
                 onClick={(e) => e.stopPropagation()}
-                onFocus={(e) => e.stopPropagation()}
+                onFocus={(e) => { e.stopPropagation(); setIsEditingTitle(true) }}
+                onBlur={(e) => { e.stopPropagation(); setIsEditingTitle(false); if (task && titleDraft !== task.title) updateTask(id, { title: titleDraft }) }}
                 onKeyDown={(e) => e.stopPropagation()}
                 onDoubleClick={(e) => e.stopPropagation()}
+                autoComplete="off"
+                spellCheck={false}
+                autoCorrect="off"
+                autoCapitalize="off"
                 placeholder="タスク名"
                 aria-label="タスク名"
             />
