@@ -67,6 +67,13 @@ jobs:
             echo "=== Checking which server block will be used ==="
             docker exec poster-mapping-deploy-frontend-1 cat /etc/nginx/conf.d/00-task.kanazawa-application-support.jp.conf | grep -A 5 "server_name\|root"
             
+            echo "=== Checking default.conf ==="
+            docker exec poster-mapping-deploy-frontend-1 ls -la /etc/nginx/conf.d/ | grep -E "default|00-"
+            docker exec poster-mapping-deploy-frontend-1 cat /etc/nginx/conf.d/default.conf 2>/dev/null | grep -A 3 "server_name\|listen" || echo "default.conf not found or no server_name"
+            
+            echo "=== Testing Nginx configuration for task.kanazawa-application-support.jp ==="
+            docker exec poster-mapping-deploy-frontend-1 nginx -T 2>&1 | grep -A 20 "task.kanazawa-application-support.jp" || echo "No matching server block found"
+            
             echo "=== Reloading Nginx ==="
             docker exec poster-mapping-deploy-frontend-1 nginx -s reload
             
