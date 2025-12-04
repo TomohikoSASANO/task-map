@@ -37,7 +37,7 @@ jobs:
           strip_components: 1
           rm: true  # 既存ファイルを削除してからアップロード
       
-      - name: Restart Nginx (if needed)
+      - name: Copy files to Docker container and reload Nginx
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEPLOY_HOST }}
@@ -45,4 +45,7 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           port: ${{ secrets.DEPLOY_PORT || 22 }}
           script: |
-            sudo systemctl reload nginx || true
+            # ホストからDockerコンテナ内にファイルをコピー
+            docker cp /var/www/task.kanazawa-application-support.jp/. poster-mapping-deploy-frontend-1:/var/www/task.kanazawa-application-support.jp/
+            # コンテナ内のNginxをリロード
+            docker exec poster-mapping-deploy-frontend-1 nginx -s reload || true
