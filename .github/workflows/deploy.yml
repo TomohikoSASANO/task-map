@@ -45,7 +45,29 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           port: ${{ secrets.DEPLOY_PORT || 22 }}
           script: |
-            # ホストからDockerコンテナ内にファイルをコピー
+            set -e
+            echo "=== Checking host directory ==="
+            ls -la /var/www/task.kanazawa-application-support.jp/ | head -10
+            
+            echo "=== Ensuring container directory exists ==="
+            docker exec poster-mapping-deploy-frontend-1 mkdir -p /var/www/task.kanazawa-application-support.jp
+            
+            echo "=== Copying files to container ==="
             docker cp /var/www/task.kanazawa-application-support.jp/. poster-mapping-deploy-frontend-1:/var/www/task.kanazawa-application-support.jp/
-            # コンテナ内のNginxをリロード
-            docker exec poster-mapping-deploy-frontend-1 nginx -s reload || true
+            
+            echo "=== Verifying files in container ==="
+            docker exec poster-mapping-deploy-frontend-1 ls -la /var/www/task.kanazawa-application-support.jp/ | head -10
+            
+            echo "=== Checking index.html in container ==="
+            docker exec poster-mapping-deploy-frontend-1 cat /var/www/task.kanazawa-application-support.jp/index.html | head -5
+            
+            echo "=== Checking Nginx configuration ==="
+            docker exec poster-mapping-deploy-frontend-1 nginx -t
+            
+            echo "=== Checking which server block will be used ==="
+            docker exec poster-mapping-deploy-frontend-1 cat /etc/nginx/conf.d/00-task.kanazawa-application-support.jp.conf | grep -A 5 "server_name\|root"
+            
+            echo "=== Reloading Nginx ==="
+            docker exec poster-mapping-deploy-frontend-1 nginx -s reload
+            
+            echo "=== Deployment completed successfully ==="
