@@ -1,13 +1,18 @@
-import React, { useEffect } from 'react'
+import React, { useEffect, useState } from 'react'
 import { ReactFlowProvider } from 'reactflow'
 import { Canvas } from './Canvas'
 import { Legend } from './components/Legend'
 import { Sidebar } from './components/Sidebar'
+import { FloatingButton } from './components/FloatingButton'
 import { useAppStore } from './store'
+import { useIsMobile } from './hooks/useIsMobile'
 
 export const App: React.FC = () => {
     const createTask = useAppStore((s) => s.createTask)
     const rootIds = useAppStore((s) => s.rootTaskIds)
+    const isMobile = useIsMobile()
+    const [sidebarOpen, setSidebarOpen] = useState(false)
+    const [sidebarPinned, setSidebarPinned] = useState(false)
 
     // 初回起動時にサンプルタスクを1つ作成
     useEffect(() => {
@@ -21,21 +26,64 @@ export const App: React.FC = () => {
         }
     }, [])
 
+    const handleToggleSidebar = () => {
+        setSidebarOpen(!sidebarOpen)
+    }
+
+    const handleCloseSidebar = () => {
+        setSidebarOpen(false)
+    }
+
+    const handleTogglePin = () => {
+        setSidebarPinned(!sidebarPinned)
+    }
+
     return (
         <div className="h-full w-full bg-slate-50 text-slate-900 flex flex-col">
-            <div className="p-3 border-b bg-white sticky top-0 z-10 flex items-center gap-3">
+            <div className="p-3 border-b bg-white sticky z-10 flex items-center gap-3">
                 <h1 className="font-bold">Task Map</h1>
-                <span className="text-xs text-slate-500">正式版</span>
-                <div className="ml-auto text-xs text-slate-500">Delete: 選択エッジ削除 / Ctrl+Z: Undo / Ctrl+C/V: コピー貼付 / Shift+クリック: 複数選択</div>
+                {!isMobile && (
+                    <div className="ml-auto text-xs text-slate-500">Delete: 選択エッジ削除 / Ctrl+Z: Undo / Ctrl+C/V: コピー貼付 / Shift+クリック: 複数選択</div>
+                )}
             </div>
-            <div className="flex-1 flex min-h-0">
-                <div className="flex-1 relative">
+            <div className="flex-1 flex min-h-0 relative overflow-hidden">
+                <div 
+                    className="flex-1 relative" 
+                    style={{ 
+                        minHeight: 0,
+                        height: '100%',
+                        width: '100%',
+                        paddingBottom: isMobile && sidebarOpen ? '20vh' : '0'
+                    }}
+                >
                     <ReactFlowProvider>
                         <Canvas />
                     </ReactFlowProvider>
                     <Legend />
                 </div>
-                <Sidebar />
+                {isMobile ? (
+                    <>
+                        <Sidebar
+                            isOpen={sidebarOpen}
+                            isPinned={sidebarPinned}
+                            onClose={handleCloseSidebar}
+                            onTogglePin={handleTogglePin}
+                        />
+                        {!sidebarOpen && (
+                            <FloatingButton
+                                onClick={handleToggleSidebar}
+                                isOpen={sidebarOpen}
+                            />
+                        )}
+                    </>
+                ) : (
+                    <Sidebar
+                        isOpen={true}
+                        isPinned={true}
+                        onClose={() => {}}
+                        onTogglePin={() => {}}
+                    />
+                )}
             </div>
         </div>
     )

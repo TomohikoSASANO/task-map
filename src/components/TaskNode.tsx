@@ -16,9 +16,10 @@ const Ripple: React.FC<{ active: boolean }> = ({ active }) => (
 type Props = {
     id: TaskId
     data: { title: string; depth?: number; highlight?: boolean }
+    skipHandles?: boolean
 }
 
-export const TaskNode: React.FC<Props> = ({ id, data }) => {
+export const TaskNode: React.FC<Props> = ({ id, data, skipHandles = false }) => {
     const task = useAppStore((s) => s.tasks[id])
     const users = useAppStore((s) => s.users)
     const allTasks = useAppStore((s) => s.tasks)
@@ -79,6 +80,7 @@ export const TaskNode: React.FC<Props> = ({ id, data }) => {
         }
         return walk(id)
     })()
+
     return (
         <motion.div
             animate={{ scale: isDragging ? 1.06 : 1, transition: { type: 'spring', stiffness: 320, damping: 18 } }}
@@ -132,7 +134,7 @@ export const TaskNode: React.FC<Props> = ({ id, data }) => {
                     <span className="mt-0.5 text-[10px] text-slate-700 leading-none bg-white/90 px-1 rounded shadow">{assignee.name}</span>
                 </div>
             )}
-            <div className="flex items-center gap-2 mb-1" onPointerDown={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2 mb-1">
                 <button
                     className={`nodrag nopan min-w-[28px] min-h-[28px] w-7 h-7 rounded-full border-2 flex items-center justify-center transition-all hover:scale-110 active:scale-95 cursor-pointer ${isDone ? 'bg-emerald-500 border-emerald-600 text-white' : 'bg-slate-200 border-slate-400 text-slate-600 hover:bg-slate-300'}`}
                     style={{ fontSize: '14px', pointerEvents: 'auto', touchAction: 'manipulation' }}
@@ -187,9 +189,16 @@ export const TaskNode: React.FC<Props> = ({ id, data }) => {
                 onCompositionStart={() => { isComposingRef.current = true }}
                 onCompositionEnd={(e) => { isComposingRef.current = false; setTitleDraft(e.currentTarget.value) }}
                 onPointerDown={(e) => { e.stopPropagation(); }}
-                onMouseDown={(e) => e.stopPropagation()}
-                onClick={(e) => e.stopPropagation()}
-                onFocus={(e) => { e.stopPropagation(); setIsEditingTitle(true) }}
+                onMouseDown={(e) => {
+                    e.stopPropagation()
+                }}
+                onClick={(e) => {
+                    e.stopPropagation()
+                }}
+                onFocus={(e) => { 
+                    e.stopPropagation()
+                    setIsEditingTitle(true)
+                }}
                 onBlur={(e) => { e.stopPropagation(); setIsEditingTitle(false); if (task && titleDraft !== task.title) updateTask(id, { title: titleDraft }) }}
                 onKeyDown={(e) => e.stopPropagation()}
                 onDoubleClick={(e) => e.stopPropagation()}
@@ -201,10 +210,10 @@ export const TaskNode: React.FC<Props> = ({ id, data }) => {
                 aria-label="タスク名"
             />
             {/* 期日 */}
-            <div className="mt-1 flex items-center gap-2" onPointerDown={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
+            <div className="mt-1 flex items-center gap-2">
                 <input
                     type="date"
-                    className="text-[12px] border rounded px-1 py-0.5"
+                    className="text-[12px] border rounded px-1 py-0.5 nodrag nopan"
                     value={task.deadline.dateISO ?? ''}
                     onChange={(e) => updateTask(id, { deadline: { dateISO: e.target.value || null } })}
                     aria-label="締切"
@@ -220,7 +229,7 @@ export const TaskNode: React.FC<Props> = ({ id, data }) => {
             </div>
 
             {/* 簡易メモ（トグル） */}
-            <div className="mt-1" onPointerDown={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
+            <div className="mt-1">
                 <button
                     className="text-[11px] px-1 rounded hover:bg-slate-100"
                     onClick={(e) => { e.stopPropagation(); setMemoOpen((v) => !v) }}
@@ -234,9 +243,15 @@ export const TaskNode: React.FC<Props> = ({ id, data }) => {
                         value={(task as any).memo ?? ''}
                         onChange={(e) => updateTask(id, { memo: e.target.value } as any)}
                         onPointerDown={(e) => e.stopPropagation()}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onClick={(e) => e.stopPropagation()}
-                        onFocus={(e) => e.stopPropagation()}
+                        onMouseDown={(e) => {
+                            e.stopPropagation()
+                        }}
+                        onClick={(e) => {
+                            e.stopPropagation()
+                        }}
+                        onFocus={(e) => {
+                            e.stopPropagation()
+                        }}
                         draggable={false}
                         placeholder="メモ"
                         title="メモ"
@@ -245,8 +260,12 @@ export const TaskNode: React.FC<Props> = ({ id, data }) => {
                 )}
             </div>
             {/* ハンドルは非表示（React Flow 内部の要件を満たすため設置） */}
-            <Handle type="source" position={Position.Right} style={{ opacity: 0 }} />
-            <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
+            {!skipHandles && (
+                <>
+                    <Handle type="source" position={Position.Right} style={{ opacity: 0 }} />
+                    <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
+                </>
+            )}
         </motion.div>
     )
 }

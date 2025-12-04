@@ -37,6 +37,7 @@ export const Canvas: React.FC = () => {
     const viewportRef = useRef<{ x: number; y: number; zoom: number }>({ x: 0, y: 0, zoom: 1 })
     const [dragVersion, setDragVersion] = useState(0)
     const selectedIdsRef = useRef<string[]>([])
+    const mobileDragRef = useRef<{ type: 'task' | 'user'; id?: string; active: boolean } | null>(null)
 
 
     const snapshotGraph = () => {
@@ -83,7 +84,17 @@ export const Canvas: React.FC = () => {
             // 深さ
             let depth = 0; let p = t.parentId; while (p) { depth += 1; p = graph.tasks[p]?.parentId ?? null }
             if (isVisible(id)) {
-                arr.push({ id, type: 'task', data: { title: t.title, depth, highlight: candidateId === id }, position: pos, draggable: true })
+                arr.push({ 
+                    id, 
+                    type: 'task', 
+                    data: { 
+                        title: t.title, 
+                        depth, 
+                        highlight: candidateId === id
+                    }, 
+                    position: pos, 
+                    draggable: true 
+                })
             }
         }
         return arr
@@ -268,6 +279,94 @@ export const Canvas: React.FC = () => {
 
     // 監視ロールバックは撤廃（操作単位のロールバックに限定）
 
+    // モバイル時のタッチイベント処理
+    useEffect(() => {
+        const handleTouchMove = (e: TouchEvent) => {
+            const mobileDrag = (window as any)._mobileDrag
+            if (!mobileDrag || !mobileDrag.active) return
+
+            const touch = e.touches[0]
+            if (!touch) return
+
+            const p = rf.screenToFlowPosition({ x: touch.clientX, y: touch.clientY })
+            const rfNodes = rf.getNodes()
+            let hit: string | null = null
+            for (const n of rfNodes) {
+                const w = n.width ?? 160
+                const h = n.height ?? 64
+                const left = n.position.x
+                const top = n.position.y
+                const right = left + w
+                const bottom = top + h
+                if (p.x >= left && p.x <= right && p.y >= top && p.y <= bottom) { hit = n.id; break }
+            }
+            if (hit !== candidateId) setCandidateId(hit)
+        }
+
+        const handleTouchEnd = (e: TouchEvent) => {
+            const mobileDrag = (window as any)._mobileDrag
+            if (!mobileDrag || !mobileDrag.active) return
+
+            const touch = e.changedTouches[0]
+            if (!touch) return
+
+            // ドロップ処理（既存のonDropロジックを再利用）
+            const prev = snapshotGraph()
+            historyRef.current.push(prev)
+            const p = rf.screenToFlowPosition({ x: touch.clientX, y: touch.clientY })
+            
+            let parentId: string | null = candidateId
+            if (!parentId) {
+                const rfNodes = rf.getNodes()
+                for (const n of rfNodes) {
+                    const w = n.width ?? 160
+                    const h = n.height ?? 64
+                    const left = n.position.x
+                    const top = n.position.y
+                    const right = left + w
+                    const bottom = top + h
+                    if (p.x >= left && p.x <= right && p.y >= top && p.y <= bottom) { parentId = n.id; break }
+                }
+            }
+
+            if (mobileDrag.type === 'task') {
+                // タスク追加
+                let task: { id: string }
+                try {
+                    task = createTask({ title: '新しいタスク', parentId })
+                } catch (e) {
+                    useAppStore.getState().setGraph(prev)
+                    return
+                }
+                if (parentId) {
+                    const parent = graph.tasks[parentId]
+                    useAppStore.getState().updateTask(parentId, { expanded: true })
+                    const pos = { x: (parent.position?.x ?? 0) + 220, y: (parent.position?.y ?? 0) }
+                    updateTask(task.id, { position: pos })
+                } else {
+                    updateTask(task.id, { position: { x: p.x, y: p.y } })
+                }
+            } else if (mobileDrag.type === 'user' && mobileDrag.id) {
+                // ユーザー割り当て（既存のノードに割り当てる場合）
+                if (parentId) {
+                    updateTask(parentId, { assigneeId: mobileDrag.id })
+                }
+            }
+
+            setCandidateId(null)
+            mobileDragRef.current = null
+            ;(window as any)._mobileDrag = null
+        }
+
+        window.addEventListener('touchmove', handleTouchMove, { passive: false })
+        window.addEventListener('touchend', handleTouchEnd, { passive: false })
+
+        return () => {
+            window.removeEventListener('touchmove', handleTouchMove)
+            window.removeEventListener('touchend', handleTouchEnd)
+        }
+    }, [rf, candidateId, graph.tasks, createTask, updateTask])
+
     return (
         <div
             className={`h-full w-full ${((isCtrlDown) && !isKeyPanning && !isMiddlePanning) ? 'cursor-grab' : ''} ${(isKeyPanning || isMiddlePanning) ? 'cursor-grabbing' : ''}`}
@@ -312,6 +411,7 @@ export const Canvas: React.FC = () => {
                 nodesDraggable={!isCtrlDown}
                 nodesConnectable={!isCtrlDown}
                 elementsSelectable={true}
+                selectNodesOnDrag={false}
                 panOnScroll
                 zoomOnDoubleClick={false}
                 onMove={(_, viewport) => { viewportRef.current = viewport }}
@@ -367,7 +467,6 @@ export const Canvas: React.FC = () => {
                     }
                     if (hit !== candidateId) setCandidateId(hit)
                 }}
-
                 onEdgeClick={(e, edge) => { (window as any)._selectedEdgeId = edge.id; (window as any)._selectedEdge = edge; e.stopPropagation() }}
                 onNodeDragStart={(_, node) => {
                     // ボタンクリックからのドラッグを無視
