@@ -72,6 +72,7 @@ const Canvas = () => {
     const viewportRef = (0, react_1.useRef)({ x: 0, y: 0, zoom: 1 });
     const [dragVersion, setDragVersion] = (0, react_1.useState)(0);
     const selectedIdsRef = (0, react_1.useRef)([]);
+    const mobileDragRef = (0, react_1.useRef)(null);
     const snapshotGraph = () => {
         const s = store_1.useAppStore.getState();
         return JSON.parse(JSON.stringify({ tasks: s.tasks, users: s.users, rootTaskIds: s.rootTaskIds }));
@@ -124,7 +125,17 @@ const Canvas = () => {
                 p = graph.tasks[p]?.parentId ?? null;
             }
             if (isVisible(id)) {
-                arr.push({ id, type: 'task', data: { title: t.title, depth, highlight: candidateId === id }, position: pos, draggable: true });
+                arr.push({
+                    id,
+                    type: 'task',
+                    data: {
+                        title: t.title,
+                        depth,
+                        highlight: candidateId === id
+                    },
+                    position: pos,
+                    draggable: true
+                });
             }
         }
         return arr;
@@ -309,6 +320,97 @@ const Canvas = () => {
         return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); };
     }, []);
     // 監視ロールバックは撤廃（操作単位のロールバックに限定）
+    // モバイル時のタッチイベント処理
+    (0, react_1.useEffect)(() => {
+        const handleTouchMove = (e) => {
+            const mobileDrag = window._mobileDrag;
+            if (!mobileDrag || !mobileDrag.active)
+                return;
+            const touch = e.touches[0];
+            if (!touch)
+                return;
+            const p = rf.screenToFlowPosition({ x: touch.clientX, y: touch.clientY });
+            const rfNodes = rf.getNodes();
+            let hit = null;
+            for (const n of rfNodes) {
+                const w = n.width ?? 160;
+                const h = n.height ?? 64;
+                const left = n.position.x;
+                const top = n.position.y;
+                const right = left + w;
+                const bottom = top + h;
+                if (p.x >= left && p.x <= right && p.y >= top && p.y <= bottom) {
+                    hit = n.id;
+                    break;
+                }
+            }
+            if (hit !== candidateId)
+                setCandidateId(hit);
+        };
+        const handleTouchEnd = (e) => {
+            const mobileDrag = window._mobileDrag;
+            if (!mobileDrag || !mobileDrag.active)
+                return;
+            const touch = e.changedTouches[0];
+            if (!touch)
+                return;
+            // ドロップ処理（既存のonDropロジックを再利用）
+            const prev = snapshotGraph();
+            historyRef.current.push(prev);
+            const p = rf.screenToFlowPosition({ x: touch.clientX, y: touch.clientY });
+            let parentId = candidateId;
+            if (!parentId) {
+                const rfNodes = rf.getNodes();
+                for (const n of rfNodes) {
+                    const w = n.width ?? 160;
+                    const h = n.height ?? 64;
+                    const left = n.position.x;
+                    const top = n.position.y;
+                    const right = left + w;
+                    const bottom = top + h;
+                    if (p.x >= left && p.x <= right && p.y >= top && p.y <= bottom) {
+                        parentId = n.id;
+                        break;
+                    }
+                }
+            }
+            if (mobileDrag.type === 'task') {
+                // タスク追加
+                let task;
+                try {
+                    task = createTask({ title: '新しいタスク', parentId });
+                }
+                catch (e) {
+                    store_1.useAppStore.getState().setGraph(prev);
+                    return;
+                }
+                if (parentId) {
+                    const parent = graph.tasks[parentId];
+                    store_1.useAppStore.getState().updateTask(parentId, { expanded: true });
+                    const pos = { x: (parent.position?.x ?? 0) + 220, y: (parent.position?.y ?? 0) };
+                    updateTask(task.id, { position: pos });
+                }
+                else {
+                    updateTask(task.id, { position: { x: p.x, y: p.y } });
+                }
+            }
+            else if (mobileDrag.type === 'user' && mobileDrag.id) {
+                // ユーザー割り当て（既存のノードに割り当てる場合）
+                if (parentId) {
+                    updateTask(parentId, { assigneeId: mobileDrag.id });
+                }
+            }
+            setCandidateId(null);
+            mobileDragRef.current = null;
+            window._mobileDrag = null;
+        };
+        window.addEventListener('touchmove', handleTouchMove, { passive: false });
+        window.addEventListener('touchend', handleTouchEnd, { passive: false });
+        return () => {
+            window.removeEventListener('touchmove', handleTouchMove);
+            window.removeEventListener('touchend', handleTouchEnd);
+        };
+    }, [rf, candidateId, graph.tasks, createTask, updateTask]);
     return ((0, jsx_runtime_1.jsx)("div", { className: `h-full w-full ${((isCtrlDown) && !isKeyPanning && !isMiddlePanning) ? 'cursor-grab' : ''} ${(isKeyPanning || isMiddlePanning) ? 'cursor-grabbing' : ''}`, onMouseMove: (e) => {
             const p = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
             lastMouseFlowRef.current = p;
@@ -339,7 +441,7 @@ const Canvas = () => {
             setIsKeyPanning(false); if (isMiddlePanning)
             setIsMiddlePanning(false); lastMouseRef.current = null; }, onMouseLeave: () => { if (isKeyPanning)
             setIsKeyPanning(false); if (isMiddlePanning)
-            setIsMiddlePanning(false); lastMouseRef.current = null; }, children: (0, jsx_runtime_1.jsxs)(reactflow_1.default, { nodes: nodes, edges: edges, nodeTypes: nodeTypes, edgeTypes: edgeTypes, selectionOnDrag: true, multiSelectionKeyCode: null, panOnDrag: false, nodesDraggable: !isCtrlDown, nodesConnectable: !isCtrlDown, elementsSelectable: true, panOnScroll: true, zoomOnDoubleClick: false, onMove: (_, viewport) => { viewportRef.current = viewport; }, onSelectionChange: (sel) => {
+            setIsMiddlePanning(false); lastMouseRef.current = null; }, children: (0, jsx_runtime_1.jsxs)(reactflow_1.default, { nodes: nodes, edges: edges, nodeTypes: nodeTypes, edgeTypes: edgeTypes, selectionOnDrag: true, multiSelectionKeyCode: null, panOnDrag: false, nodesDraggable: !isCtrlDown, nodesConnectable: !isCtrlDown, elementsSelectable: true, selectNodesOnDrag: false, panOnScroll: true, zoomOnDoubleClick: false, onMove: (_, viewport) => { viewportRef.current = viewport; }, onSelectionChange: (sel) => {
                 // React Flow の選択イベントをそのまま採用
                 selectedIdsRef.current = (sel?.nodes ?? []).map((n) => n.id);
             }, onInit: (_) => {

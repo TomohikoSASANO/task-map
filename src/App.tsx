@@ -43,7 +43,7 @@ export const App: React.FC = () => {
             <div className="p-3 border-b bg-white sticky z-10 flex items-center gap-3">
                 <h1 className="font-bold">Task Map</h1>
                 {!isMobile && (
-                    <div className="ml-auto text-xs text-slate-500">Delete: 選択エッジ削除 / Ctrl+Z: Undo / Ctrl+C/V: コピー貼付 / Shift+クリック: 複数選択</div>
+                <div className="ml-auto text-xs text-slate-500">Delete: 選択エッジ削除 / Ctrl+Z: Undo / Ctrl+C/V: コピー貼付 / Shift+クリック: 複数選択</div>
                 )}
             </div>
             <div className="flex-1 flex min-h-0 relative overflow-hidden">

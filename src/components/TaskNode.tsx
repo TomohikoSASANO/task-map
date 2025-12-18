@@ -262,8 +262,8 @@ export const TaskNode: React.FC<Props> = ({ id, data, skipHandles = false }) => 
             {/* ハンドルは非表示（React Flow 内部の要件を満たすため設置） */}
             {!skipHandles && (
                 <>
-                    <Handle type="source" position={Position.Right} style={{ opacity: 0 }} />
-                    <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
+            <Handle type="source" position={Position.Right} style={{ opacity: 0 }} />
+            <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
                 </>
             )}
         </motion.div>
