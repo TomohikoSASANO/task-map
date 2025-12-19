@@ -110,24 +110,39 @@ jobs:
             fi
 
             if [ "$NEED_ISSUE" -eq 1 ]; then
-              echo "Issuing/renewing certificate via certbot..."
-              # Prefer host certbot if available; fallback to a certbot container.
-              if command -v certbot >/dev/null 2>&1; then
-                WEBROOT="/opt/poster-mapping-deploy/certbot/www"
-                if [ ! -d "$WEBROOT" ]; then
-                  WEBROOT="/var/www/certbot"
-                fi
-                mkdir -p "$WEBROOT"
-                certbot certonly --webroot -w "$WEBROOT" -d "$DOMAIN" --cert-name "$DOMAIN" --agree-tos --non-interactive --force-renewal --email "admin@kanazawa-application-support.jp"
-              else
-                CERTBOT_CONTAINER="$(docker ps --format '{{.Names}}' | grep -i certbot | head -n 1 || true)"
-                if [ -z "$CERTBOT_CONTAINER" ]; then
-                  echo "ERROR: certbot not found on host and no certbot container running."
-                  exit 1
-                fi
-                docker exec "$CERTBOT_CONTAINER" sh -c 'mkdir -p /var/www/certbot'
-                docker exec "$CERTBOT_CONTAINER" certbot certonly --webroot -w /var/www/certbot -d "$DOMAIN" --cert-name "$DOMAIN" --agree-tos --non-interactive --force-renewal --email "admin@kanazawa-application-support.jp"
+              echo "Issuing/renewing certificate via certbot (docker, using SAME volumes as nginx)..."
+
+              # Determine host mount paths used by the nginx container for letsencrypt + webroot.
+              LE_HOST="$(docker inspect "$CONTAINER" --format '{{range .Mounts}}{{if eq .Destination "/etc/letsencrypt"}}{{.Source}}{{end}}{{end}}')"
+              WEB_HOST="$(docker inspect "$CONTAINER" --format '{{range .Mounts}}{{if eq .Destination "/var/www/certbot"}}{{.Source}}{{end}}{{end}}')"
+
+              echo "Detected mounts:"
+              echo "  /etc/letsencrypt -> ${LE_HOST:-<not mounted>}"
+              echo "  /var/www/certbot -> ${WEB_HOST:-<not mounted>}"
+
+              # Fallback to known host paths used by poster-mapping-deploy compose.
+              if [ -z "$LE_HOST" ] && [ -d "/opt/poster-mapping-deploy/certbot/conf" ]; then
+                LE_HOST="/opt/poster-mapping-deploy/certbot/conf"
+                echo "Fallback LE_HOST=$LE_HOST"
               fi
+              if [ -z "$WEB_HOST" ] && [ -d "/opt/poster-mapping-deploy/certbot/www" ]; then
+                WEB_HOST="/opt/poster-mapping-deploy/certbot/www"
+                echo "Fallback WEB_HOST=$WEB_HOST"
+              fi
+
+              if [ -z "$LE_HOST" ] || [ -z "$WEB_HOST" ]; then
+                echo "ERROR: Cannot determine letsencrypt/webroot volume mounts for certbot."
+                echo "Please ensure nginx container mounts /etc/letsencrypt and /var/www/certbot, or adjust fallback paths."
+                exit 1
+              fi
+
+              mkdir -p "$LE_HOST" "$WEB_HOST"
+              docker run --rm \
+                -v "$LE_HOST:/etc/letsencrypt" \
+                -v "$WEB_HOST:/var/www/certbot" \
+                certbot/certbot:latest \
+                certonly --webroot -w /var/www/certbot -d "$DOMAIN" --cert-name "$DOMAIN" \
+                --agree-tos --non-interactive --force-renewal --email "admin@kanazawa-application-support.jp"
             fi
 
             echo "Step 5.5: Show certificate details (debug)"
