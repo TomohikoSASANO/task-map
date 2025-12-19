@@ -80,10 +80,19 @@ jobs:
             docker cp /var/www/task.kanazawa-application-support.jp/. "$CONTAINER":/var/www/task.kanazawa-application-support.jp/
 
             echo "Step 3: Copy Nginx config to Docker container"
-            docker cp /tmp/nginx-task.conf "$CONTAINER":/etc/nginx/conf.d/00-task.kanazawa-application-support.jp.conf
+            # NOTE: This container may be Alpine-based where HTTP vhosts live under /etc/nginx/http.d
+            # (and /etc/nginx/conf.d may be included in a different context).
+            NGINX_CONF_DIR="/etc/nginx/conf.d"
+            if docker exec "$CONTAINER" sh -c 'test -d /etc/nginx/http.d'; then
+              NGINX_CONF_DIR="/etc/nginx/http.d"
+            elif docker exec "$CONTAINER" sh -c 'test -d /etc/nginx/sites-enabled'; then
+              NGINX_CONF_DIR="/etc/nginx/sites-enabled"
+            fi
+            echo "Using nginx conf dir: $NGINX_CONF_DIR"
+            docker cp /tmp/nginx-task.conf "$CONTAINER":"$NGINX_CONF_DIR"/00-task.kanazawa-application-support.jp.conf
 
-            echo "Step 4: Disable default.conf if exists"
-            docker exec "$CONTAINER" sh -c 'if [ -f /etc/nginx/conf.d/default.conf ]; then mv /etc/nginx/conf.d/default.conf /etc/nginx/conf.d/default.conf.disabled 2>/dev/null || true; fi'
+            echo "Step 4: Show nginx.conf include hints"
+            docker exec "$CONTAINER" sh -c 'echo "--- /etc/nginx/nginx.conf (head) ---"; head -80 /etc/nginx/nginx.conf || true; echo "--- /etc/nginx (dirs) ---"; ls -la /etc/nginx || true'
 
             echo "Step 5: Test Nginx configuration"
             docker exec "$CONTAINER" nginx -t
