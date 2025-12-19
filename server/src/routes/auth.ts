@@ -27,7 +27,8 @@ export async function authRoutes(app: FastifyInstance) {
         if (existing) return reply.status(409).send({ error: 'email_exists' })
 
         const passwordHash = await argon2.hash(password)
-        const user = await prisma.user.create({ data: { email, passwordHash, name } })
+        // exactOptionalPropertyTypes 対策: undefined を Prisma に渡さない
+        const user = await prisma.user.create({ data: { email, passwordHash, ...(name ? { name } : {}) } })
         return reply.send({ id: user.id, email: user.email, name: user.name })
     })
 
