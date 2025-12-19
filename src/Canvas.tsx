@@ -4,7 +4,7 @@ import 'reactflow/dist/style.css'
 import { FloatingEdge } from './components/edges/FloatingEdge'
 import { TaskNode } from './components/TaskNode'
 import { useAppStore } from './store'
-import { useCollab } from './sync/collab'
+import { useCollabContext } from './sync/collab'
 
 const nodeTypes = { task: TaskNode }
 const edgeTypes = { floating: FloatingEdge }
@@ -39,7 +39,7 @@ export const Canvas: React.FC = () => {
     const [dragVersion, setDragVersion] = useState(0)
     const selectedIdsRef = useRef<string[]>([])
     const mobileDragRef = useRef<{ type: 'task' | 'user'; id?: string; active: boolean } | null>(null)
-    const { collab, sendPresence } = useCollab()
+    const { collab, sendPresence } = useCollabContext()
     const containerRef = useRef<HTMLDivElement | null>(null)
     const presencePeers = collab.peers
 

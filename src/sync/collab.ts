@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { createContext, createElement, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '../store'
 
 type Graph = { users: Record<string, any>; tasks: Record<string, any>; rootTaskIds: string[] }
@@ -66,6 +66,25 @@ function wsBase(): string {
   return window.location.origin.replace(/^http/, 'ws')
 }
 
+type CollabApi = {
+  collab: CollabState
+  sendPresence: (p: { cursor?: { x: number; y: number }; selectedIds?: string[] }) => void
+}
+
+const CollabContext = createContext<CollabApi | null>(null)
+
+export function CollabProvider(props: { children: any }) {
+  const api = useCollab()
+  // JSX を使わずに Provider を返す（.ts のまま維持）
+  return createElement(CollabContext.Provider, { value: api }, props.children)
+}
+
+export function useCollabContext(): CollabApi {
+  const v = useContext(CollabContext)
+  if (!v) throw new Error('useCollabContext must be used within <CollabProvider>')
+  return v
+}
+
 export function useCollab() {
   const mapKey = useMemo(() => getMapKey(), [])
   const me = useMemo(() => getMe(), [])
@@ -75,6 +94,9 @@ export function useCollab() {
   const ignoreNextRef = useRef(false)
   const lastSentGraphRef = useRef<string>('')
   const revRef = useRef(0)
+  const bootstrappedRef = useRef(false)
+  const hasInitRef = useRef(false)
+  const serverEmptyAtInitRef = useRef<boolean | null>(null)
 
   // Initial load from server (best-effort)
   useEffect(() => {
@@ -108,6 +130,22 @@ export function useCollab() {
     }
   }, [mapKey])
 
+  const maybeBootstrapLocalToServer = () => {
+    if (bootstrappedRef.current) return
+    const ws = wsRef.current
+    if (!ws || ws.readyState !== WebSocket.OPEN) return
+    if (!hasInitRef.current) return
+    if (serverEmptyAtInitRef.current !== true) return
+    const s = useAppStore.getState()
+    const graph: Graph = { tasks: s.tasks as any, users: s.users as any, rootTaskIds: s.rootTaskIds as any }
+    const localCount = Object.keys(graph.tasks || {}).length
+    if (localCount === 0) return
+    bootstrappedRef.current = true
+    try {
+      ws.send(JSON.stringify({ type: 'state', rev: revRef.current, graph }))
+    } catch {}
+  }
+
   // WebSocket connect
   useEffect(() => {
     const qs = new URLSearchParams({
@@ -140,12 +178,19 @@ export function useCollab() {
         return
       }
       if (msg?.type === 'init') {
+        hasInitRef.current = true
         if (msg.graph) {
           const remote = msg.graph as Graph
           const local = useAppStore.getState()
           const localCount = Object.keys(local.tasks || {}).length
           const remoteCount = Object.keys(remote.tasks || {}).length
-          if (!(remoteCount === 0 && localCount > 0)) {
+          serverEmptyAtInitRef.current = remoteCount === 0
+          // If server is empty but local has data (first time), bootstrap local -> server once.
+          if (remoteCount === 0 && localCount > 0) {
+            revRef.current = Number(msg.rev ?? revRef.current)
+            setState((s) => ({ ...s, rev: Number(msg.rev ?? s.rev) }))
+            maybeBootstrapLocalToServer()
+          } else {
             ignoreNextRef.current = true
             useAppStore.getState().setGraph(remote)
           }
@@ -200,6 +245,19 @@ export function useCollab() {
       }
       const ws = wsRef.current
       if (!ws || ws.readyState !== WebSocket.OPEN) return
+      // init 前に送るとサーバ既存状態を潰しうるので、init 後に限定
+      if (!hasInitRef.current) return
+
+      // サーバが空だった場合、ローカルにデータが生えたタイミングで1回だけブートストラップ
+      if (serverEmptyAtInitRef.current === true && !bootstrappedRef.current) {
+        const count = Object.keys((s.tasks as any) || {}).length
+        if (count > 0) {
+          // debounceを待たず即送信（初期共有のため）
+          maybeBootstrapLocalToServer()
+          // 以降は通常同期へ
+        }
+      }
+
       const graph: Graph = { tasks: s.tasks as any, users: s.users as any, rootTaskIds: s.rootTaskIds as any }
       const serialized = JSON.stringify(graph)
       if (serialized === last) return
@@ -223,4 +281,5 @@ export function useCollab() {
 
   return { collab: state, sendPresence }
 }
+
 

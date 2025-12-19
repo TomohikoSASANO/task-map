@@ -6,16 +6,16 @@ import { Sidebar } from './components/Sidebar'
 import { FloatingButton } from './components/FloatingButton'
 import { useAppStore } from './store'
 import { useIsMobile } from './hooks/useIsMobile'
-import { useCollab } from './sync/collab'
+import { CollabProvider, useCollabContext } from './sync/collab'
 import { MobileTaskSheet } from './components/MobileTaskSheet'
 
-export const App: React.FC = () => {
+const AppInner: React.FC = () => {
     const createTask = useAppStore((s) => s.createTask)
     const rootIds = useAppStore((s) => s.rootTaskIds)
     const isMobile = useIsMobile()
     const [sidebarOpen, setSidebarOpen] = useState(false)
     const [sidebarPinned, setSidebarPinned] = useState(false)
-    const { collab } = useCollab()
+    const { collab } = useCollabContext()
     const mobileSheetTaskId = useAppStore((s) => s.mobileSheetTaskId)
 
     // 初回起動時にサンプルタスクを1つ作成
@@ -99,6 +99,14 @@ export const App: React.FC = () => {
                 )}
             </div>
         </div>
+    )
+}
+
+export const App: React.FC = () => {
+    return (
+        <CollabProvider>
+            <AppInner />
+        </CollabProvider>
     )
 }
 
