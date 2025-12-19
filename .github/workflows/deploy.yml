@@ -84,12 +84,14 @@ jobs:
             echo "Using container: $CONTAINER"
 
             echo "Step 0.5: Ensure taskmap API containers are running (taskmap-db, taskmap-api)"
-            # Detect the poster-mapping-deploy docker network (external) and attach our containers to it.
-            NET="$(docker network ls --format '{{.Name}}' | grep -E '^poster-mapping-deploy' | head -n 1 || true)"
+            # Use the SAME docker network as the nginx(frontend) container, so nginx can resolve taskmap-api by name.
+            NET="$(docker inspect "$CONTAINER" --format '{{range $k, $v := .NetworkSettings.Networks}}{{println $k}}{{end}}' | head -n 1 || true)"
             if [ -z "$NET" ]; then
-              NET="poster-mapping-deploy_default"
+              echo "ERROR: Cannot determine docker network for $CONTAINER"
+              docker inspect "$CONTAINER" || true
+              exit 1
             fi
-            echo "Using docker network: $NET"
+            echo "Using docker network (from nginx container): $NET"
 
             if ! docker ps --format '{{.Names}}' | grep -q '^taskmap-db$'; then
               docker rm -f taskmap-db >/dev/null 2>&1 || true
