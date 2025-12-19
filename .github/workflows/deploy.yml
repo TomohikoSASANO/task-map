@@ -84,8 +84,13 @@ jobs:
             # Some images include /etc/nginx/conf.d/*.conf in multiple contexts (e.g. stream),
             # which would make `server {}` invalid. Create a dedicated directory and include it
             # explicitly inside the http { } block.
-            docker exec "$CONTAINER" sh -c 'mkdir -p /etc/nginx/taskmap.d'
-            docker exec "$CONTAINER" sh -c 'if ! grep -q "/etc/nginx/taskmap.d/\\*\\.conf" /etc/nginx/nginx.conf; then sed -i "/^http[[:space:]]*{/a\\\n    include /etc/nginx/taskmap.d/*.conf;\\\n" /etc/nginx/nginx.conf; fi'
+            docker exec "$CONTAINER" sh -c 'set -e; mkdir -p /etc/nginx/taskmap.d; cp -f /etc/nginx/nginx.conf \"/etc/nginx/nginx.conf.bak.taskmap.$(date +%s)\"'
+            # Repair common broken states from previous runs:
+            # - literal "\n" appended to the include line
+            # - missing newline before "include" (e.g. "}include ...")
+            docker exec "$CONTAINER" sh -c 'set -e; CONF=/etc/nginx/nginx.conf; sed -i "s/}include /}\ninclude /g" \"$CONF\"; sed -i "s/include \\/etc\\/nginx\\/taskmap\\.d\\/\\*\\.conf;\\\\n/include \\/etc\\/nginx\\/taskmap.d\\/*.conf;/g" \"$CONF\"'
+            # Insert include line safely right after `http {` if not present.
+            docker exec "$CONTAINER" sh -c 'set -e; CONF=/etc/nginx/nginx.conf; if ! grep -q "include /etc/nginx/taskmap.d/*.conf;" \"$CONF\"; then awk '"'"'{print} /^http[[:space:]]*\\{[[:space:]]*$/ {print \"    include /etc/nginx/taskmap.d/*.conf;\"}'"'"' \"$CONF\" > /tmp/nginx.conf.taskmap && mv /tmp/nginx.conf.taskmap \"$CONF\"; fi'
             # Clean up any previous misplaced configs from earlier runs
             docker exec "$CONTAINER" sh -c 'rm -f /etc/nginx/conf.d/00-task.kanazawa-application-support.jp.conf 2>/dev/null || true'
             docker exec "$CONTAINER" sh -c 'rm -f /etc/nginx/http.d/00-task.kanazawa-application-support.jp.conf 2>/dev/null || true'
