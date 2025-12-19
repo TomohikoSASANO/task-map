@@ -120,6 +120,10 @@ jobs:
               echo "Certificate already exists."
             fi
 
+            echo "Step 5.5: Show certificate details (debug)"
+            docker exec "$CONTAINER" sh -c "ls -la /etc/letsencrypt/live/$DOMAIN || true"
+            docker exec "$CONTAINER" sh -c "openssl x509 -in /etc/letsencrypt/live/$DOMAIN/fullchain.pem -noout -subject -issuer -startdate -enddate || true"
+
             echo "Step 6: Test Nginx configuration"
             docker exec "$CONTAINER" nginx -t
 
