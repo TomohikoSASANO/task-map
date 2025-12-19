@@ -66,3 +66,5 @@ Write-Host ""
 Write-Host "4. Final verification..." -ForegroundColor Yellow
 $finalItems = gh project item-list $projectNumber --owner $owner --format json | ConvertFrom-Json
 Write-Host "Total items in project: $($finalItems.Count)" -ForegroundColor Green
+
+

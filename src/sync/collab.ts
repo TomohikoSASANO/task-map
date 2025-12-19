@@ -54,8 +54,10 @@ function getMapKey(): string {
 }
 
 function apiBase(): string {
-  // Prefer same-origin (nginx reverse proxy). Allow override for local dev.
-  return (import.meta as any).env?.VITE_API_BASE || ''
+  // Prefer same-origin (nginx reverse proxy).
+  // Optional override for local dev without using import.meta (tsconfig is CJS).
+  // Set in DevTools: localStorage.setItem('taskmap-api-base', 'http://localhost:8080')
+  return (localStorage.getItem('taskmap-api-base') || '').trim()
 }
 
 function wsBase(): string {
