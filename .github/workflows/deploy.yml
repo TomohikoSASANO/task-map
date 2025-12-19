@@ -95,9 +95,22 @@ jobs:
 
             echo "Step 5: Ensure TLS certificate exists (Let's Encrypt)"
             DOMAIN="task.kanazawa-application-support.jp"
+            NEED_ISSUE=0
             if ! docker exec "$CONTAINER" sh -c "test -f /etc/letsencrypt/live/$DOMAIN/fullchain.pem"; then
-              echo "Certificate not found in container. Issuing via certbot..."
+              NEED_ISSUE=1
+              echo "Certificate file not found in container."
+            else
+              # If the cert exists but is for a different domain, browsers show "not secure".
+              if ! docker exec "$CONTAINER" sh -c "openssl x509 -in /etc/letsencrypt/live/$DOMAIN/fullchain.pem -noout -text | grep -q \"$DOMAIN\""; then
+                NEED_ISSUE=1
+                echo "Existing certificate does not look like it matches $DOMAIN. Will re-issue."
+              else
+                echo "Certificate exists and appears to match $DOMAIN."
+              fi
+            fi
 
+            if [ "$NEED_ISSUE" -eq 1 ]; then
+              echo "Issuing/renewing certificate via certbot..."
               # Prefer host certbot if available; fallback to a certbot container.
               if command -v certbot >/dev/null 2>&1; then
                 WEBROOT="/opt/poster-mapping-deploy/certbot/www"
@@ -105,19 +118,16 @@ jobs:
                   WEBROOT="/var/www/certbot"
                 fi
                 mkdir -p "$WEBROOT"
-                certbot certonly --webroot -w "$WEBROOT" -d "$DOMAIN" --agree-tos --non-interactive --keep-until-expiring --email "admin@$DOMAIN"
+                certbot certonly --webroot -w "$WEBROOT" -d "$DOMAIN" --cert-name "$DOMAIN" --agree-tos --non-interactive --force-renewal --email "admin@kanazawa-application-support.jp"
               else
                 CERTBOT_CONTAINER="$(docker ps --format '{{.Names}}' | grep -i certbot | head -n 1 || true)"
                 if [ -z "$CERTBOT_CONTAINER" ]; then
                   echo "ERROR: certbot not found on host and no certbot container running."
                   exit 1
                 fi
-                # Most certbot images mount the webroot at /var/www/certbot
                 docker exec "$CERTBOT_CONTAINER" sh -c 'mkdir -p /var/www/certbot'
-                docker exec "$CERTBOT_CONTAINER" certbot certonly --webroot -w /var/www/certbot -d "$DOMAIN" --agree-tos --non-interactive --keep-until-expiring --email "admin@$DOMAIN"
+                docker exec "$CERTBOT_CONTAINER" certbot certonly --webroot -w /var/www/certbot -d "$DOMAIN" --cert-name "$DOMAIN" --agree-tos --non-interactive --force-renewal --email "admin@kanazawa-application-support.jp"
               fi
-            else
-              echo "Certificate already exists."
             fi
 
             echo "Step 5.5: Show certificate details (debug)"
