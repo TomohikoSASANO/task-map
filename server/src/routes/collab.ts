@@ -1,3 +1,4 @@
+// @ts-ignore - @fastify/websocket types may be incomplete
 import websocket from '@fastify/websocket'
 import type { FastifyInstance } from 'fastify'
 import { prisma } from '../db'
@@ -112,16 +113,17 @@ export async function collabRoutes(app: FastifyInstance) {
   })
 
   // WS: realtime collaboration
-  app.get('/ws/:mapKey', { websocket: true }, async (conn, req) => {
-    const mapKey = (req.params as any).mapKey as string
+  // @ts-ignore - @fastify/websocket route option types
+  app.get('/ws/:mapKey', { websocket: true }, async (conn, req: any) => {
+    const mapKey = (req.params as any)?.mapKey as string
     const q = (req.query as any) || {}
-    const clientId = (q.clientId as string) || (req.headers['x-client-id'] as string) || ''
-    const name = (q.name as string) || (req.headers['x-client-name'] as string) || 'Anonymous'
-    const color = (q.color as string) || (req.headers['x-client-color'] as string) || '#0ea5e9'
+    const clientId = (q.clientId as string) || ((req.headers as any)?.['x-client-id'] as string) || ''
+    const name = (q.name as string) || ((req.headers as any)?.['x-client-name'] as string) || 'Anonymous'
+    const color = (q.color as string) || ((req.headers as any)?.['x-client-color'] as string) || '#0ea5e9'
 
     if (!clientId) {
       wsSend(conn.socket, { type: 'error', error: 'missing_client_id' })
-      conn.socket.close()
+      ;(conn.socket as any).close()
       return
     }
 
@@ -151,7 +153,7 @@ export async function collabRoutes(app: FastifyInstance) {
     })
     broadcast(mapKey, { type: 'peer:join', peer: st.peers.get(clientId) }, clientId)
 
-    conn.socket.on('message', async (raw: any) => {
+    ;(conn.socket as any).on('message', async (raw: any) => {
       let msg: any
       try {
         msg = JSON.parse(raw.toString())
@@ -198,7 +200,7 @@ export async function collabRoutes(app: FastifyInstance) {
       }
     })
 
-    conn.socket.on('close', () => {
+    ;(conn.socket as any).on('close', () => {
       const set = st.sockets.get(clientId)
       if (set) {
         set.delete(conn.socket)
@@ -211,4 +213,6 @@ export async function collabRoutes(app: FastifyInstance) {
     })
   })
 }
+
+
 

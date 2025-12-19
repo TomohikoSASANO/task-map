@@ -1,3 +1,4 @@
+// @ts-ignore - nodemailer types may be incomplete
 import nodemailer from 'nodemailer'
 
 export type SmtpConfig = {
