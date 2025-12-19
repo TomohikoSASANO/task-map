@@ -3,6 +3,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { Handle, Position } from 'reactflow'
 import { useAppStore } from '../store'
 import { TaskId } from '../types'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 const Ripple: React.FC<{ active: boolean }> = ({ active }) => (
     <motion.span
@@ -28,6 +29,8 @@ export const TaskNode: React.FC<Props> = ({ id, data, skipHandles = false }) => 
     const actionable = useAppStore((s) => s.isActionable(id))
     const updateTask = useAppStore((s) => s.updateTask)
     const toggleExpand = useAppStore((s) => s.toggleExpand)
+    const setMobileSheetTaskId = useAppStore((s) => s.setMobileSheetTaskId)
+    const isMobile = useIsMobile()
     const draggingId = useAppStore((s) => s.draggingId)
     const ripples = useAppStore((s) => s.ripples)
     const [memoOpen, setMemoOpen] = useState(false)
@@ -265,6 +268,16 @@ export const TaskNode: React.FC<Props> = ({ id, data, skipHandles = false }) => 
             <Handle type="source" position={Position.Right} style={{ opacity: 0 }} />
             <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
                 </>
+            )}
+            {/* モバイル: ノード全体タップで編集シートを開く */}
+            {isMobile && (
+                <button
+                    type="button"
+                    className="absolute inset-0 z-10 nodrag nopan"
+                    style={{ background: 'transparent' }}
+                    onClick={(e) => { e.stopPropagation(); setMobileSheetTaskId(id) }}
+                    aria-label="タスク編集"
+                />
             )}
         </motion.div>
     )

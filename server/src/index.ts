@@ -4,6 +4,7 @@ import rateLimit from '@fastify/rate-limit'
 import Fastify from 'fastify'
 import { sendTestMail } from './mailer'
 import { authRoutes } from './routes/auth'
+import { collabRoutes } from './routes/collab'
 
 const app = Fastify({ logger: true })
 
@@ -26,6 +27,7 @@ async function main() {
     })
 
     await authRoutes(app)
+    await collabRoutes(app)
 
     const port = Number(process.env.PORT || 8080)
     const host = process.env.HOST || '0.0.0.0'

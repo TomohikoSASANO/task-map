@@ -2,6 +2,30 @@
 
 ## デプロイの流れ
 
+## 最終的に動いている構成（2025-12-19時点）
+
+- `task.kanazawa-application-support.jp` は **既存のDockerコンテナ** `poster-mapping-deploy-frontend-*` のNginxで配信
+- デプロイは GitHub Actions（`.github/workflows/deploy.yml`）で実行
+  - `dist/**` をサーバー（ホスト）へ転送 → その後コンテナ内 `/var/www/task.kanazawa-application-support.jp/` へコピー
+  - Nginx vhost をコンテナ内 `/etc/nginx/conf.d/00-task.kanazawa-application-support.jp.conf` にコピー
+  - `nginx -t` → `nginx -s reload`
+  - Let’s Encrypt 証明書がなければ発行（certbotをNginxコンテナと同じvolumeに対して実行）
+
+## 重要な落とし穴（ここで何度も詰まった）
+
+- **SCPの転送元**:
+  - `dist/*` だと `assets/` などネストしたファイルが転送されず壊れる
+  - 正: `dist/**`
+- **scp-action の target**:
+  - `target` は「ディレクトリ」指定。ファイルパス（例 `/tmp/nginx-task.conf`）を指定すると失敗する
+  - 正: `target: /tmp` へ置いてから `docker cp /tmp/nginx-task.conf ...` でコンテナへコピー
+- **Nginxの include 位置**:
+  - 一部イメージ/設定では `conf.d` を別コンテキストで読んでしまい `server directive is not allowed here` が出る
+  - そのため今は **コンテナ内の `nginx.conf` を壊れた状態から自動修復**する処理をワークフローに入れている
+- **HTTPS（証明書）**:
+  - 証明書は「Nginxコンテナが実際に参照している `/etc/letsencrypt`」に入っていないと意味がない
+  - そのため certbot は **Nginxコンテナと同じマウント先（volume）**に対して実行する
+
 ### 1. 現在のブランチ確認
 
 ```powershell
@@ -115,3 +139,5 @@ GitHub Actionsでデプロイの進行状況を確認：
 1. サイトにアクセスして動作確認
 2. チームメンバーにURLを共有
 3. フィードバックを収集して改善
+
+

@@ -53,6 +53,16 @@ jobs:
           # scp-action's `target` is a directory on the remote.
           target: "/tmp"
 
+      - name: Copy server (API) sources to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          source: "server/**"
+          target: "/opt/taskmap"
+
       - name: Setup Docker container and Nginx
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -72,6 +82,35 @@ jobs:
               exit 1
             fi
             echo "Using container: $CONTAINER"
+
+            echo "Step 0.5: Ensure taskmap API containers are running (taskmap-db, taskmap-api)"
+            # Detect the poster-mapping-deploy docker network (external) and attach our containers to it.
+            NET="$(docker network ls --format '{{.Name}}' | grep -E '^poster-mapping-deploy' | head -n 1 || true)"
+            if [ -z "$NET" ]; then
+              NET="poster-mapping-deploy_default"
+            fi
+            echo "Using docker network: $NET"
+
+            if ! docker ps --format '{{.Names}}' | grep -q '^taskmap-db$'; then
+              docker rm -f taskmap-db >/dev/null 2>&1 || true
+              docker run -d --name taskmap-db --network "$NET" \
+                -e POSTGRES_USER=taskmap -e POSTGRES_PASSWORD=taskmap -e POSTGRES_DB=taskmap \
+                -v taskmap_db_data:/var/lib/postgresql/data \
+                postgres:16
+            fi
+
+            # Build & run API (Fastify) from /opt/taskmap/server
+            if [ ! -d /opt/taskmap/server ]; then
+              echo "ERROR: /opt/taskmap/server not found (scp failed?)"
+              exit 1
+            fi
+            docker rm -f taskmap-api >/dev/null 2>&1 || true
+            docker build -t taskmap-api:latest /opt/taskmap/server
+            docker run -d --name taskmap-api --network "$NET" \
+              -e DATABASE_URL="postgresql://taskmap:taskmap@taskmap-db:5432/taskmap" \
+              -e PORT=8080 -e HOST=0.0.0.0 \
+              -e JWT_SECRET="${JWT_SECRET:-dev-secret}" \
+              taskmap-api:latest
 
             echo "Step 1: Create directory in Docker container"
             docker exec "$CONTAINER" mkdir -p /var/www/task.kanazawa-application-support.jp

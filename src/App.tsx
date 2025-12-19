@@ -6,6 +6,8 @@ import { Sidebar } from './components/Sidebar'
 import { FloatingButton } from './components/FloatingButton'
 import { useAppStore } from './store'
 import { useIsMobile } from './hooks/useIsMobile'
+import { useCollab } from './sync/collab'
+import { MobileTaskSheet } from './components/MobileTaskSheet'
 
 export const App: React.FC = () => {
     const createTask = useAppStore((s) => s.createTask)
@@ -13,6 +15,8 @@ export const App: React.FC = () => {
     const isMobile = useIsMobile()
     const [sidebarOpen, setSidebarOpen] = useState(false)
     const [sidebarPinned, setSidebarPinned] = useState(false)
+    const { collab } = useCollab()
+    const mobileSheetTaskId = useAppStore((s) => s.mobileSheetTaskId)
 
     // 初回起動時にサンプルタスクを1つ作成
     useEffect(() => {
@@ -42,6 +46,9 @@ export const App: React.FC = () => {
         <div className="h-full w-full bg-slate-50 text-slate-900 flex flex-col">
             <div className="p-3 border-b bg-white sticky z-10 flex items-center gap-3">
                 <h1 className="font-bold">Task Map</h1>
+                <div className="text-xs text-slate-500">
+                    {collab.connected ? `同期中（オンライン ${Math.max(1, collab.peers.length)}）` : 'オフライン（ローカルのみ）'}
+                </div>
                 {!isMobile && (
                 <div className="ml-auto text-xs text-slate-500">Delete: 選択エッジ削除 / Ctrl+Z: Undo / Ctrl+C/V: コピー貼付 / Shift+クリック: 複数選択</div>
                 )}
@@ -60,6 +67,12 @@ export const App: React.FC = () => {
                         <Canvas />
                     </ReactFlowProvider>
                     <Legend />
+                    {isMobile && (
+                        <MobileTaskSheet
+                            isOpen={!!mobileSheetTaskId}
+                            onClose={() => useAppStore.getState().setMobileSheetTaskId(null)}
+                        />
+                    )}
                 </div>
                 {isMobile ? (
                     <>

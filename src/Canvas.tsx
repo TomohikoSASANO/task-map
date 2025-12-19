@@ -4,6 +4,7 @@ import 'reactflow/dist/style.css'
 import { FloatingEdge } from './components/edges/FloatingEdge'
 import { TaskNode } from './components/TaskNode'
 import { useAppStore } from './store'
+import { useCollab } from './sync/collab'
 
 const nodeTypes = { task: TaskNode }
 const edgeTypes = { floating: FloatingEdge }
@@ -38,6 +39,9 @@ export const Canvas: React.FC = () => {
     const [dragVersion, setDragVersion] = useState(0)
     const selectedIdsRef = useRef<string[]>([])
     const mobileDragRef = useRef<{ type: 'task' | 'user'; id?: string; active: boolean } | null>(null)
+    const { collab, sendPresence } = useCollab()
+    const containerRef = useRef<HTMLDivElement | null>(null)
+    const presencePeers = collab.peers
 
 
     const snapshotGraph = () => {
@@ -369,10 +373,18 @@ export const Canvas: React.FC = () => {
 
     return (
         <div
+            ref={containerRef}
             className={`h-full w-full ${((isCtrlDown) && !isKeyPanning && !isMiddlePanning) ? 'cursor-grab' : ''} ${(isKeyPanning || isMiddlePanning) ? 'cursor-grabbing' : ''}`}
             onMouseMove={(e) => {
                 const p = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY })
                 lastMouseFlowRef.current = p
+                // presence: cursor (throttle)
+                const now = Date.now()
+                const last = (window as any).__taskmapPresenceTs as number | undefined
+                if (!last || now - last > 60) {
+                    ;(window as any).__taskmapPresenceTs = now
+                    sendPresence({ cursor: { x: p.x, y: p.y }, selectedIds: selectedIdsRef.current })
+                }
                 if (isKeyPanning || isMiddlePanning) {
                     const last = lastMouseRef.current
                     if (last) {
@@ -400,6 +412,28 @@ export const Canvas: React.FC = () => {
             onMouseUpCapture={() => { if (isKeyPanning) setIsKeyPanning(false); if (isMiddlePanning) setIsMiddlePanning(false); lastMouseRef.current = null }}
             onMouseLeave={() => { if (isKeyPanning) setIsKeyPanning(false); if (isMiddlePanning) setIsMiddlePanning(false); lastMouseRef.current = null }}
         >
+            {/* Remote cursors (screen space overlay) */}
+            <div className="pointer-events-none absolute inset-0 z-20">
+                {containerRef.current && presencePeers
+                    .filter((p) => p.clientId !== collab.me.clientId && p.cursor)
+                    .map((p) => {
+                        const v = viewportRef.current
+                        const rect = containerRef.current!.getBoundingClientRect()
+                        const x = (p.cursor!.x * v.zoom) + v.x + rect.left
+                        const y = (p.cursor!.y * v.zoom) + v.y + rect.top
+                        return (
+                            <div
+                                key={p.clientId}
+                                style={{ position: 'fixed', left: x, top: y, transform: 'translate(-50%, -50%)' }}
+                            >
+                                <div className="w-2.5 h-2.5 rounded-full border border-white shadow" style={{ background: p.color }} />
+                                <div className="mt-1 text-[10px] text-slate-800 bg-white/90 px-1 rounded shadow whitespace-nowrap">
+                                    {p.name}
+                                </div>
+                            </div>
+                        )
+                    })}
+            </div>
             <ReactFlow
                 nodes={nodes}
                 edges={edges}
@@ -418,6 +452,7 @@ export const Canvas: React.FC = () => {
                 onSelectionChange={(sel) => {
                     // React Flow の選択イベントをそのまま採用
                     selectedIdsRef.current = (sel?.nodes ?? []).map((n) => n.id)
+                    sendPresence({ selectedIds: selectedIdsRef.current })
                 }}
                 onInit={(_) => {
                     // 初期表示時のみ軽くフィット。内部ノードは制御しない。
