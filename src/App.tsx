@@ -18,6 +18,10 @@ const AppInner: React.FC = () => {
     const { collab } = useCollabContext()
     const mobileSheetTaskId = useAppStore((s) => s.mobileSheetTaskId)
 
+    useEffect(() => {
+        console.log('[App] Collab state:', { connected: collab.connected, peers: collab.peers.length, rev: collab.rev })
+    }, [collab.connected, collab.peers.length, collab.rev])
+
     // 初回起動時にサンプルタスクを1つ作成
     useEffect(() => {
         if (rootIds.length === 0) {
