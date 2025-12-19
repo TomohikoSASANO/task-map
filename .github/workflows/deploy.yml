@@ -80,25 +80,18 @@ jobs:
             docker cp /var/www/task.kanazawa-application-support.jp/. "$CONTAINER":/var/www/task.kanazawa-application-support.jp/
 
             echo "Step 3: Copy Nginx config to Docker container"
-            # Robust approach:
-            # Some images include /etc/nginx/conf.d/*.conf in multiple contexts (e.g. stream),
-            # which would make `server {}` invalid. Create a dedicated directory and include it
-            # explicitly inside the http { } block.
-            docker exec "$CONTAINER" sh -c 'set -e; mkdir -p /etc/nginx/taskmap.d; cp -f /etc/nginx/nginx.conf \"/etc/nginx/nginx.conf.bak.taskmap.$(date +%s)\"'
-            # Repair common broken states from previous runs:
-            # - literal "\n" appended to the include line
-            # - missing newline before "include" (e.g. "}include ...")
-            docker exec "$CONTAINER" sh -c 'set -e; CONF=/etc/nginx/nginx.conf; sed -i "s/}include /}\ninclude /g" \"$CONF\"; sed -i "s/include \\/etc\\/nginx\\/taskmap\\.d\\/\\*\\.conf;\\\\n/include \\/etc\\/nginx\\/taskmap.d\\/*.conf;/g" \"$CONF\"'
-            # Insert include line safely right after `http {` if not present.
-            docker exec "$CONTAINER" sh -c 'set -e; CONF=/etc/nginx/nginx.conf; if ! grep -q "include /etc/nginx/taskmap.d/*.conf;" \"$CONF\"; then awk '"'"'{print} /^http[[:space:]]*\\{[[:space:]]*$/ {print \"    include /etc/nginx/taskmap.d/*.conf;\"}'"'"' \"$CONF\" > /tmp/nginx.conf.taskmap && mv /tmp/nginx.conf.taskmap \"$CONF\"; fi'
-            # Clean up any previous misplaced configs from earlier runs
-            docker exec "$CONTAINER" sh -c 'rm -f /etc/nginx/conf.d/00-task.kanazawa-application-support.jp.conf 2>/dev/null || true'
-            docker exec "$CONTAINER" sh -c 'rm -f /etc/nginx/http.d/00-task.kanazawa-application-support.jp.conf 2>/dev/null || true'
-            docker exec "$CONTAINER" sh -c 'rm -f /etc/nginx/sites-enabled/00-task.kanazawa-application-support.jp.conf 2>/dev/null || true'
-            docker cp /tmp/nginx-task.conf "$CONTAINER":/etc/nginx/taskmap.d/00-task.kanazawa-application-support.jp.conf
+            # Keep things simple and robust:
+            # - Ensure nginx.conf isn't corrupted (previous runs may have injected literal "\n" or "}include ...")
+            # - Place our vhost into /etc/nginx/conf.d where nginx.conf already includes it inside http { }.
+            docker exec "$CONTAINER" sh -c 'set -e; CONF=/etc/nginx/nginx.conf; cp -f "$CONF" "$CONF.bak.taskmap.$(date +%s)" || true'
+            # Repair common broken states from previous runs (no newline insertion needed):
+            docker exec "$CONTAINER" sh -c 'set -e; CONF=/etc/nginx/nginx.conf; sed -i "s/;\\\\n/;/g" "$CONF"; sed -i "s/}include \\/etc\\/nginx\\/conf\\.d\\/\\*\\.conf;$/}/g" "$CONF"; sed -i "s/include \\/etc\\/nginx\\/taskmap\\.d\\/\\*\\.conf;\\\\n//g" "$CONF"; sed -i "s/include \\/etc\\/nginx\\/taskmap\\.d\\/\\*\\.conf;//g" "$CONF"'
+            # Remove any previously injected taskmap.d directory (not used anymore)
+            docker exec "$CONTAINER" sh -c 'rm -rf /etc/nginx/taskmap.d 2>/dev/null || true'
+            docker cp /tmp/nginx-task.conf "$CONTAINER":/etc/nginx/conf.d/00-task.kanazawa-application-support.jp.conf
 
             echo "Step 4: Show nginx.conf include hints"
-            docker exec "$CONTAINER" sh -c 'echo "--- /etc/nginx/nginx.conf (head) ---"; head -120 /etc/nginx/nginx.conf || true; echo "--- include lines ---"; grep -n "include" /etc/nginx/nginx.conf || true; echo "--- /etc/nginx (dirs) ---"; ls -la /etc/nginx || true'
+            docker exec "$CONTAINER" sh -c 'echo "--- /etc/nginx/nginx.conf (head) ---"; head -120 /etc/nginx/nginx.conf || true; echo "--- include lines ---"; grep -n "include" /etc/nginx/nginx.conf || true; echo "--- /etc/nginx/conf.d ---"; ls -la /etc/nginx/conf.d || true'
 
             echo "Step 5: Test Nginx configuration"
             docker exec "$CONTAINER" nginx -t
