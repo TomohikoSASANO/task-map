@@ -35,7 +35,9 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           port: ${{ secrets.DEPLOY_PORT || 22 }}
-          source: "dist/*"
+          # Copy full build output (including nested assets/).
+          # Use strip_components to drop the leading "dist/" on the remote.
+          source: "dist/**"
           target: "/var/www/task.kanazawa-application-support.jp"
           strip_components: 1
           rm: true
@@ -48,7 +50,8 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           port: ${{ secrets.DEPLOY_PORT || 22 }}
           source: "nginx-task.conf"
-          target: "/tmp/nginx-task.conf"
+          # scp-action's `target` is a directory on the remote.
+          target: "/tmp"
 
       - name: Setup Docker container and Nginx
         uses: appleboy/ssh-action@v1.0.3
@@ -84,6 +87,12 @@ jobs:
 
             echo "Index.html first 3 lines:"
             docker exec poster-mapping-deploy-frontend-1 head -3 /var/www/task.kanazawa-application-support.jp/index.html
+
+            echo "Assets directory (should exist):"
+            docker exec poster-mapping-deploy-frontend-1 sh -c 'if [ -d /var/www/task.kanazawa-application-support.jp/assets ]; then ls -la /var/www/task.kanazawa-application-support.jp/assets | head -5; else echo "MISSING: /var/www/task.kanazawa-application-support.jp/assets"; fi'
+
+            echo "Index.html title (should be Task Map):"
+            docker exec poster-mapping-deploy-frontend-1 sh -c 'grep -n "<title>" /var/www/task.kanazawa-application-support.jp/index.html | head -3 || true'
 
             echo "Nginx config check:"
             docker exec poster-mapping-deploy-frontend-1 nginx -T 2>&1 | grep -A 5 "server_name task.kanazawa-application-support.jp" | head -10
