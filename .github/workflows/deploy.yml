@@ -235,7 +235,7 @@ jobs:
             docker exec "$CONTAINER" sh -c 'grep -n "<title>" /var/www/task.kanazawa-application-support.jp/index.html | head -3 || true'
 
             echo "Nginx config check:"
-            docker exec "$CONTAINER" nginx -T 2>&1 | grep -A 5 "server_name task.kanazawa-application-support.jp" | head -10
+            docker exec "$CONTAINER" nginx -T 2>&1 | grep -A 5 "server_name task.kanazawa-application-support.jp" | head -10 || true
 
             echo "Deployment completed successfully!"
 
