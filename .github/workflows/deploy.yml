@@ -76,10 +76,11 @@ jobs:
             echo "Step 0: Detect frontend container"
             CONTAINER="$(docker ps --format '{{.Names}}' | grep -E '^poster-mapping-deploy-frontend' | head -n 1 || true)"
             if [ -z "$CONTAINER" ]; then
-              echo "ERROR: poster-mapping-deploy-frontend container not found."
+              echo "WARN: poster-mapping-deploy-frontend container not found."
               echo "Currently running containers:"
-              docker ps -a
-              exit 1
+              docker ps -a || true
+              echo "WARN: Skipping docker copy/nginx reload steps. (Files were still copied to host by scp.)"
+              exit 0
             fi
             echo "Using container: $CONTAINER"
 
