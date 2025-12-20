@@ -83,7 +83,7 @@ jobs:
             fi
             echo "Using container: $CONTAINER"
 
-            echo "Step 0.5: Ensure taskmap API containers are running (taskmap-db, taskmap-api)"
+            echo "Step 0.5: Detect docker network (from nginx container)"
             # Use the SAME docker network as the nginx(frontend) container, so nginx can resolve taskmap-api by name.
             NET="$(docker inspect "$CONTAINER" --format '{{range $k, $v := .NetworkSettings.Networks}}{{println $k}}{{end}}' | head -n 1 || true)"
             if [ -z "$NET" ]; then
@@ -92,27 +92,6 @@ jobs:
               exit 1
             fi
             echo "Using docker network (from nginx container): $NET"
-
-            if ! docker ps --format '{{.Names}}' | grep -q '^taskmap-db$'; then
-              docker rm -f taskmap-db >/dev/null 2>&1 || true
-              docker run -d --name taskmap-db --network "$NET" \
-                -e POSTGRES_USER=taskmap -e POSTGRES_PASSWORD=taskmap -e POSTGRES_DB=taskmap \
-                -v taskmap_db_data:/var/lib/postgresql/data \
-                postgres:16
-            fi
-
-            # Build & run API (Fastify) from /opt/taskmap/server
-            if [ ! -d /opt/taskmap/server ]; then
-              echo "ERROR: /opt/taskmap/server not found (scp failed?)"
-              exit 1
-            fi
-            docker rm -f taskmap-api >/dev/null 2>&1 || true
-            docker build -t taskmap-api:latest /opt/taskmap/server
-            docker run -d --name taskmap-api --network "$NET" \
-              -e DATABASE_URL="postgresql://taskmap:taskmap@taskmap-db:5432/taskmap" \
-              -e PORT=8080 -e HOST=0.0.0.0 \
-              -e JWT_SECRET="${JWT_SECRET:-dev-secret}" \
-              taskmap-api:latest
 
             echo "Step 1: Create directory in Docker container"
             docker exec "$CONTAINER" mkdir -p /var/www/task.kanazawa-application-support.jp
@@ -195,6 +174,51 @@ jobs:
 
             echo "Step 7: Reload Nginx"
             docker exec "$CONTAINER" nginx -s reload
+
+            echo "Step 7.5: (non-fatal) Ensure taskmap DB/API are running"
+            # NOTE: We keep the static deploy green even if API build/run fails.
+            if ! docker ps --format '{{.Names}}' | grep -q '^taskmap-db$'; then
+              echo "Starting taskmap-db..."
+              docker rm -f taskmap-db >/dev/null 2>&1 || true
+              if ! docker run -d --name taskmap-db --network "$NET" \
+                -e POSTGRES_USER=taskmap -e POSTGRES_PASSWORD=taskmap -e POSTGRES_DB=taskmap \
+                -v taskmap_db_data:/var/lib/postgresql/data \
+                postgres:16; then
+                echo "WARN: failed to start taskmap-db"
+              fi
+            fi
+
+            # Best-effort wait for DB readiness (don't fail the deploy if it never becomes ready)
+            if docker ps --format '{{.Names}}' | grep -q '^taskmap-db$'; then
+              echo "Waiting for taskmap-db to be ready..."
+              for i in $(seq 1 30); do
+                docker exec taskmap-db pg_isready -U taskmap -d taskmap >/dev/null 2>&1 && break
+                sleep 1
+              done
+              docker exec taskmap-db pg_isready -U taskmap -d taskmap || true
+            fi
+
+            # Build & run API (Fastify) from /opt/taskmap/server (best-effort)
+            if [ ! -d /opt/taskmap/server ]; then
+              echo "WARN: /opt/taskmap/server not found (scp failed?)"
+            else
+              echo "Building taskmap-api..."
+              docker rm -f taskmap-api >/dev/null 2>&1 || true
+              if ! docker build -t taskmap-api:latest /opt/taskmap/server; then
+                echo "WARN: docker build failed for taskmap-api"
+              else
+                echo "Starting taskmap-api..."
+                if ! docker run -d --name taskmap-api --network "$NET" \
+                  -e DATABASE_URL="postgresql://taskmap:taskmap@taskmap-db:5432/taskmap" \
+                  -e PORT=8080 -e HOST=0.0.0.0 \
+                  -e JWT_SECRET="${JWT_SECRET:-dev-secret}" \
+                  taskmap-api:latest; then
+                  echo "WARN: docker run failed for taskmap-api"
+                fi
+                docker ps --format '{{.Names}}\t{{.Status}}' | grep -E '^taskmap-api' || true
+                docker logs taskmap-api --tail 200 || true
+              fi
+            fi
 
             echo "Step 8: Verify deployment"
             echo "Files in container:"
