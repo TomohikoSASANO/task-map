@@ -129,123 +129,133 @@ export async function collabRoutes(app: FastifyInstance) {
 
   // WS: realtime collaboration
   // @ts-ignore - @fastify/websocket route option types
-  app.get('/ws/:mapKey', { websocket: true }, async (conn, req: any) => {
-    WS_DEBUG.connectCount += 1
-    WS_DEBUG.lastConnectAt = Date.now()
-    // NOTE: Depending on fastify/websocket versions, `req` may be FastifyRequest or raw IncomingMessage-like.
-    // We parse from URL to be robust.
-    const rawUrl: string = (req?.raw?.url as string) || (req?.url as string) || ''
-    WS_DEBUG.lastRawUrl = rawUrl
-    const urlObj = new URL(rawUrl.startsWith('http') ? rawUrl : `http://local${rawUrl}`)
+  app.get('/ws/:mapKey', { websocket: true }, (conn, req: any) => {
+    // Avoid `async` websocket handler; some versions close the socket when the handler promise resolves.
+    ;(async () => {
+      WS_DEBUG.connectCount += 1
+      WS_DEBUG.lastConnectAt = Date.now()
+      WS_DEBUG.lastError = ''
 
-    const mapKey =
-      ((req?.params as any)?.mapKey as string) ||
-      urlObj.pathname.split('/').filter(Boolean).slice(-1)[0] ||
-      'default'
-    WS_DEBUG.lastMapKey = mapKey
+      // NOTE: Depending on fastify/websocket versions, `req` may be FastifyRequest or raw IncomingMessage-like.
+      // We parse from URL to be robust.
+      const rawUrl: string = (req?.raw?.url as string) || (req?.url as string) || ''
+      WS_DEBUG.lastRawUrl = rawUrl
+      const urlObj = new URL(rawUrl.startsWith('http') ? rawUrl : `http://local${rawUrl}`)
 
-    const q = Object.fromEntries(urlObj.searchParams.entries()) as Record<string, string>
-    const headers = (req?.headers as any) || (req?.raw?.headers as any) || {}
+      const mapKey =
+        ((req?.params as any)?.mapKey as string) ||
+        urlObj.pathname.split('/').filter(Boolean).slice(-1)[0] ||
+        'default'
+      WS_DEBUG.lastMapKey = mapKey
 
-    const clientId = (q.clientId as string) || (headers['x-client-id'] as string) || ''
-    WS_DEBUG.lastClientId = clientId
-    const name = (q.name as string) || (headers['x-client-name'] as string) || 'Anonymous'
-    const color = (q.color as string) || (headers['x-client-color'] as string) || '#0ea5e9'
+      const q = Object.fromEntries(urlObj.searchParams.entries()) as Record<string, string>
+      const headers = (req?.headers as any) || (req?.raw?.headers as any) || {}
 
-    if (!clientId) {
-      wsSend(conn.socket, { type: 'error', error: 'missing_client_id' })
-      try {
-        ;(conn.socket as any).close?.(1008, 'missing_client_id')
-      } catch {
-        ;(conn.socket as any).close?.()
-      }
-      return
-    }
+      const clientId = (q.clientId as string) || (headers['x-client-id'] as string) || ''
+      WS_DEBUG.lastClientId = clientId
+      const name = (q.name as string) || (headers['x-client-name'] as string) || 'Anonymous'
+      const color = (q.color as string) || (headers['x-client-color'] as string) || '#0ea5e9'
 
-    const { mapId } = await ensureSystemMap(mapKey)
-    const st = getOrInitMapState(mapKey)
-    if (st.rev === 0 && st.graph === DEFAULT_GRAPH) {
-      const latest = await loadLatestSnapshot(mapId)
-      if (latest) {
-        st.rev = latest.rev
-        st.graph = latest.graph
-      }
-    }
-
-    // register socket
-    const set = st.sockets.get(clientId) ?? new Set<any>()
-    set.add(conn.socket)
-    st.sockets.set(clientId, set)
-
-    st.peers.set(clientId, { clientId, name, color, updatedAt: Date.now() })
-
-    // send init
-    wsSend(conn.socket, {
-      type: 'init',
-      rev: st.rev,
-      graph: st.graph,
-      peers: Array.from(st.peers.values()),
-    })
-    WS_DEBUG.initSentCount += 1
-    broadcast(mapKey, { type: 'peer:join', peer: st.peers.get(clientId) }, clientId)
-
-    ;(conn.socket as any).on('message', async (raw: any) => {
-      let msg: any
-      try {
-        msg = JSON.parse(raw.toString())
-      } catch {
-        return
-      }
-
-      if (msg?.type === 'presence') {
-        const cur = st.peers.get(clientId)
-        if (!cur) return
-        const next: PeerPresence = {
-          ...cur,
-          cursor: msg.cursor ?? cur.cursor,
-          selectedIds: Array.isArray(msg.selectedIds) ? msg.selectedIds : cur.selectedIds,
-          updatedAt: Date.now(),
-        }
-        st.peers.set(clientId, next)
-        broadcast(mapKey, { type: 'presence', peer: next }, clientId)
-        return
-      }
-
-      if (msg?.type === 'state') {
-        const incomingRev = Number(msg.rev ?? -1)
-        const graph = msg.graph as Graph
-        if (!graph?.tasks || !graph?.users || !Array.isArray(graph?.rootTaskIds)) return
-
-        // last-write-wins, but ignore obviously old revs
-        if (incomingRev < st.rev - 5) return
-
-        st.rev += 1
-        st.graph = graph
-
-        // persist snapshot (best-effort)
+      if (!clientId) {
+        wsSend(conn.socket, { type: 'error', error: 'missing_client_id' })
         try {
-          await prisma.snapshot.create({
-            data: { mapId, data: { rev: st.rev, graph } as any, createdBy: clientId },
-          })
+          ;(conn.socket as any).close?.(1008, 'missing_client_id')
         } catch {
-          // ignore
+          ;(conn.socket as any).close?.()
         }
-
-        broadcast(mapKey, { type: 'state', rev: st.rev, graph, from: clientId }, clientId)
         return
       }
-    })
 
-    ;(conn.socket as any).on('close', () => {
-      const set = st.sockets.get(clientId)
-      if (set) {
-        set.delete(conn.socket)
-        if (set.size === 0) {
-          st.sockets.delete(clientId)
-          st.peers.delete(clientId)
-          broadcast(mapKey, { type: 'peer:leave', clientId })
+      const { mapId } = await ensureSystemMap(mapKey)
+      const st = getOrInitMapState(mapKey)
+      if (st.rev === 0 && st.graph === DEFAULT_GRAPH) {
+        const latest = await loadLatestSnapshot(mapId)
+        if (latest) {
+          st.rev = latest.rev
+          st.graph = latest.graph
         }
       }
+
+      // register socket
+      const set = st.sockets.get(clientId) ?? new Set<any>()
+      set.add(conn.socket)
+      st.sockets.set(clientId, set)
+
+      st.peers.set(clientId, { clientId, name, color, updatedAt: Date.now() })
+
+      // send init
+      wsSend(conn.socket, {
+        type: 'init',
+        rev: st.rev,
+        graph: st.graph,
+        peers: Array.from(st.peers.values()),
+      })
+      WS_DEBUG.initSentCount += 1
+      broadcast(mapKey, { type: 'peer:join', peer: st.peers.get(clientId) }, clientId)
+
+      ;(conn.socket as any).on('message', async (raw: any) => {
+        let msg: any
+        try {
+          msg = JSON.parse(raw.toString())
+        } catch {
+          return
+        }
+
+        if (msg?.type === 'presence') {
+          const cur = st.peers.get(clientId)
+          if (!cur) return
+          const next: PeerPresence = {
+            ...cur,
+            cursor: msg.cursor ?? cur.cursor,
+            selectedIds: Array.isArray(msg.selectedIds) ? msg.selectedIds : cur.selectedIds,
+            updatedAt: Date.now(),
+          }
+          st.peers.set(clientId, next)
+          broadcast(mapKey, { type: 'presence', peer: next }, clientId)
+          return
+        }
+
+        if (msg?.type === 'state') {
+          const incomingRev = Number(msg.rev ?? -1)
+          const graph = msg.graph as Graph
+          if (!graph?.tasks || !graph?.users || !Array.isArray(graph?.rootTaskIds)) return
+
+          // last-write-wins, but ignore obviously old revs
+          if (incomingRev < st.rev - 5) return
+
+          st.rev += 1
+          st.graph = graph
+
+          // persist snapshot (best-effort)
+          try {
+            await prisma.snapshot.create({
+              data: { mapId, data: { rev: st.rev, graph } as any, createdBy: clientId },
+            })
+          } catch {
+            // ignore
+          }
+
+          broadcast(mapKey, { type: 'state', rev: st.rev, graph, from: clientId }, clientId)
+          return
+        }
+      })
+
+      ;(conn.socket as any).on('close', () => {
+        const set = st.sockets.get(clientId)
+        if (set) {
+          set.delete(conn.socket)
+          if (set.size === 0) {
+            st.sockets.delete(clientId)
+            st.peers.delete(clientId)
+            broadcast(mapKey, { type: 'peer:leave', clientId })
+          }
+        }
+      })
+    })().catch((err) => {
+      WS_DEBUG.lastError = String(err?.message || err || 'unknown_error')
+      try {
+        ;(conn.socket as any).close?.(1011, 'server_error')
+      } catch {}
     })
   })
 }
