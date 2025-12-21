@@ -60,15 +60,25 @@ function apiBase(): string {
   return (localStorage.getItem('taskmap-api-base') || '').trim()
 }
 
+function isDebug(): boolean {
+  return localStorage.getItem('taskmap-debug') === '1'
+}
+function dlog(...args: any[]) {
+  if (isDebug()) console.log(...args)
+}
+function derr(...args: any[]) {
+  if (isDebug()) console.error(...args)
+}
+
 function wsBase(): string {
   const base = apiBase()
   if (base) {
     const wsUrl = base.replace(/^http/, 'ws')
-    console.log('[Collab] Using apiBase override:', wsUrl)
+    dlog('[Collab] Using apiBase override:', wsUrl)
     return wsUrl
   }
   const originWs = window.location.origin.replace(/^http/, 'ws')
-  console.log('[Collab] Using window.location.origin:', originWs)
+  dlog('[Collab] Using window.location.origin:', originWs)
   return originWs
 }
 
@@ -160,20 +170,20 @@ export function useCollab() {
       color: me.color,
     }).toString()
     const wsUrl = `${wsBase()}/ws/${encodeURIComponent(mapKey)}?${qs}`
-    console.log('[Collab] Connecting to WebSocket:', wsUrl)
+    dlog('[Collab] Connecting to WebSocket:', wsUrl)
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
 
     ws.onopen = () => {
-      console.log('[Collab] WebSocket connected')
+      dlog('[Collab] WebSocket connected')
       setState((s) => ({ ...s, connected: true }))
     }
     ws.onclose = (ev) => {
-      console.log('[Collab] WebSocket closed', ev.code, ev.reason)
+      dlog('[Collab] WebSocket closed', ev.code, ev.reason)
       setState((s) => ({ ...s, connected: false }))
     }
     ws.onerror = (ev) => {
-      console.error('[Collab] WebSocket error', ev)
+      derr('[Collab] WebSocket error', ev)
       setState((s) => ({ ...s, connected: false }))
     }
 
@@ -185,7 +195,7 @@ export function useCollab() {
         return
       }
       if (msg?.type === 'init') {
-        console.log('[Collab] Received init message', { rev: msg.rev, peersCount: msg.peers?.length, tasksCount: Object.keys(msg.graph?.tasks || {}).length })
+        dlog('[Collab] Received init message', { rev: msg.rev, peersCount: msg.peers?.length, tasksCount: Object.keys(msg.graph?.tasks || {}).length })
         hasInitRef.current = true
         if (msg.graph) {
           const remote = msg.graph as Graph
@@ -226,7 +236,7 @@ export function useCollab() {
       }
       if (msg?.type === 'state') {
         if (msg.graph) {
-          console.log('[Collab] Received state update', { rev: msg.rev, from: msg.from, tasksCount: Object.keys(msg.graph.tasks || {}).length })
+          dlog('[Collab] Received state update', { rev: msg.rev, from: msg.from, tasksCount: Object.keys(msg.graph.tasks || {}).length })
           ignoreNextRef.current = true
           useAppStore.getState().setGraph(msg.graph as Graph)
           revRef.current = Number(msg.rev ?? revRef.current)
@@ -275,10 +285,10 @@ export function useCollab() {
       ;(window as any).__taskmapSendTimer && clearTimeout((window as any).__taskmapSendTimer)
       ;(window as any).__taskmapSendTimer = setTimeout(() => {
         try {
-          console.log('[Collab] Sending state update', { rev: revRef.current, tasksCount: Object.keys(graph.tasks || {}).length })
+          dlog('[Collab] Sending state update', { rev: revRef.current, tasksCount: Object.keys(graph.tasks || {}).length })
           ws.send(JSON.stringify({ type: 'state', rev: revRef.current, graph }))
         } catch (err) {
-          console.error('[Collab] Failed to send state', err)
+          derr('[Collab] Failed to send state', err)
         }
       }, 250)
     })

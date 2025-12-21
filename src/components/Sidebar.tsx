@@ -1,17 +1,17 @@
 import React, { useMemo, useRef, useState, useEffect } from 'react'
 import { useAppStore } from '../store'
-import { useIsMobile } from '../hooks/useIsMobile'
 
 type TabType = 'members-tasks' | 'add-member' | 'all'
 
 interface SidebarProps {
     isOpen: boolean
     isPinned: boolean
+    isMobile: boolean
     onClose: () => void
     onTogglePin: () => void
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ isOpen, isPinned, onClose, onTogglePin }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ isOpen, isPinned, isMobile, onClose, onTogglePin }) => {
     const tasks = useAppStore((s) => s.tasks)
     const users = useAppStore((s) => s.users)
     const addUser = useAppStore((s) => s.addUser)
@@ -23,7 +23,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, isPinned, onClose, onT
     const [avatarDataUrl, setAvatarDataUrl] = useState<string | null>(null)
     const [editId, setEditId] = useState<string | null>(null)
     const fileInputRef = useRef<HTMLInputElement | null>(null)
-    const isMobile = useIsMobile()
     const [activeTab, setActiveTab] = useState<TabType>('members-tasks')
     const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null)
 
