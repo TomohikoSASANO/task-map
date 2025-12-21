@@ -89,7 +89,7 @@ function getOrInitMapState(mapKey: string): ServerMapState {
 
 function wsSend(ws: any, msg: any) {
   try {
-    ws.send(JSON.stringify(msg))
+    ws?.send?.(JSON.stringify(msg))
   } catch {}
 }
 
@@ -132,6 +132,7 @@ export async function collabRoutes(app: FastifyInstance) {
   app.get('/ws/:mapKey', { websocket: true }, (conn, req: any) => {
     // Avoid `async` websocket handler; some versions close the socket when the handler promise resolves.
     ;(async () => {
+      const ws: any = (conn as any)?.socket ?? conn
       WS_DEBUG.connectCount += 1
       WS_DEBUG.lastConnectAt = Date.now()
       WS_DEBUG.lastError = ''
@@ -157,11 +158,11 @@ export async function collabRoutes(app: FastifyInstance) {
       const color = (q.color as string) || (headers['x-client-color'] as string) || '#0ea5e9'
 
       if (!clientId) {
-        wsSend(conn.socket, { type: 'error', error: 'missing_client_id' })
+        wsSend(ws, { type: 'error', error: 'missing_client_id' })
         try {
-          ;(conn.socket as any).close?.(1008, 'missing_client_id')
+          ws?.close?.(1008, 'missing_client_id')
         } catch {
-          ;(conn.socket as any).close?.()
+          ws?.close?.()
         }
         return
       }
@@ -178,13 +179,13 @@ export async function collabRoutes(app: FastifyInstance) {
 
       // register socket
       const set = st.sockets.get(clientId) ?? new Set<any>()
-      set.add(conn.socket)
+      set.add(ws)
       st.sockets.set(clientId, set)
 
       st.peers.set(clientId, { clientId, name, color, updatedAt: Date.now() })
 
       // send init
-      wsSend(conn.socket, {
+      wsSend(ws, {
         type: 'init',
         rev: st.rev,
         graph: st.graph,
@@ -193,7 +194,7 @@ export async function collabRoutes(app: FastifyInstance) {
       WS_DEBUG.initSentCount += 1
       broadcast(mapKey, { type: 'peer:join', peer: st.peers.get(clientId) }, clientId)
 
-      ;(conn.socket as any).on('message', async (raw: any) => {
+      ws?.on?.('message', async (raw: any) => {
         let msg: any
         try {
           msg = JSON.parse(raw.toString())
@@ -240,10 +241,10 @@ export async function collabRoutes(app: FastifyInstance) {
         }
       })
 
-      ;(conn.socket as any).on('close', () => {
+      ws?.on?.('close', () => {
         const set = st.sockets.get(clientId)
         if (set) {
-          set.delete(conn.socket)
+          set.delete(ws)
           if (set.size === 0) {
             st.sockets.delete(clientId)
             st.peers.delete(clientId)
