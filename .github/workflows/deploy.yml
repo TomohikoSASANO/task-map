@@ -28,6 +28,9 @@ jobs:
       - name: Build application
         run: npm run build
 
+      - name: Write build marker (version.txt)
+        run: echo "${GITHUB_SHA}" > dist/version.txt
+
       - name: Deploy files to server
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -73,34 +76,45 @@ jobs:
           script: |
             set -e
 
-            echo "Step 0: Detect frontend container"
+            DEBUG_LOG="/tmp/taskmap-deploy-debug.txt"
+            : > "$DEBUG_LOG"
+            log() { echo "[$(date -Iseconds)] $*" | tee -a "$DEBUG_LOG" ; }
+
+            log "Step 0: Detect frontend container"
             CONTAINER="$(docker ps --format '{{.Names}}' | grep -E '^poster-mapping-deploy-frontend' | head -n 1 || true)"
             if [ -z "$CONTAINER" ]; then
-              echo "WARN: poster-mapping-deploy-frontend container not found."
-              echo "Currently running containers:"
+              log "ERROR: poster-mapping-deploy-frontend container not found."
+              log "Currently running containers:"
               docker ps -a || true
-              echo "WARN: Skipping docker copy/nginx reload steps. (Files were still copied to host by scp.)"
-              exit 0
+              exit 1
             fi
-            echo "Using container: $CONTAINER"
+            log "Using container: $CONTAINER"
 
-            echo "Step 0.5: Detect docker network (from nginx container)"
+            # Always try to publish debug log into the served directory (even if we fail later).
+            trap 'docker exec "$CONTAINER" mkdir -p /var/www/task.kanazawa-application-support.jp >/dev/null 2>&1 || true; docker cp "$DEBUG_LOG" "$CONTAINER":/var/www/task.kanazawa-application-support.jp/deploy-debug.txt >/dev/null 2>&1 || true' EXIT
+
+            log "Step 0.5: Detect docker network (from nginx container)"
             # Use the SAME docker network as the nginx(frontend) container, so nginx can resolve taskmap-api by name.
             NET="$(docker inspect "$CONTAINER" --format '{{range $k, $v := .NetworkSettings.Networks}}{{println $k}}{{end}}' | head -n 1 || true)"
             if [ -z "$NET" ]; then
-              echo "ERROR: Cannot determine docker network for $CONTAINER"
+              log "ERROR: Cannot determine docker network for $CONTAINER"
               docker inspect "$CONTAINER" || true
               exit 1
             fi
-            echo "Using docker network (from nginx container): $NET"
+            log "Using docker network (from nginx container): $NET"
 
-            echo "Step 1: Create directory in Docker container"
+            log "Step 1: Create directory in Docker container"
             docker exec "$CONTAINER" mkdir -p /var/www/task.kanazawa-application-support.jp
 
-            echo "Step 2: Copy TaskMap files to Docker container"
+            log "Step 2: Copy TaskMap files to Docker container"
+            if [ ! -f /var/www/task.kanazawa-application-support.jp/index.html ]; then
+              log "ERROR: host build output missing: /var/www/task.kanazawa-application-support.jp/index.html"
+              ls -la /var/www/task.kanazawa-application-support.jp || true
+              exit 1
+            fi
             docker cp /var/www/task.kanazawa-application-support.jp/. "$CONTAINER":/var/www/task.kanazawa-application-support.jp/
 
-            echo "Step 3: Copy Nginx config to Docker container"
+            log "Step 3: Copy Nginx config to Docker container"
             # Keep things simple and robust:
             # - Ensure nginx.conf isn't corrupted (previous runs may have injected literal "\n" or "}include ...")
             # - Place our vhost into /etc/nginx/conf.d where nginx.conf already includes it inside http { }.
@@ -111,49 +125,49 @@ jobs:
             docker exec "$CONTAINER" sh -c 'rm -rf /etc/nginx/taskmap.d 2>/dev/null || true'
             docker cp /tmp/nginx-task.conf "$CONTAINER":/etc/nginx/conf.d/00-task.kanazawa-application-support.jp.conf
 
-            echo "Step 4: Show nginx.conf include hints"
+            log "Step 4: Show nginx.conf include hints"
             docker exec "$CONTAINER" sh -c 'echo "--- /etc/nginx/nginx.conf (head) ---"; head -120 /etc/nginx/nginx.conf || true; echo "--- include lines ---"; grep -n "include" /etc/nginx/nginx.conf || true; echo "--- /etc/nginx/conf.d ---"; ls -la /etc/nginx/conf.d || true'
 
-            echo "Step 5: Ensure TLS certificate exists (Let's Encrypt)"
+            log "Step 5: Ensure TLS certificate exists (Let's Encrypt)"
             DOMAIN="task.kanazawa-application-support.jp"
             NEED_ISSUE=0
             if ! docker exec "$CONTAINER" sh -c "test -f /etc/letsencrypt/live/$DOMAIN/fullchain.pem"; then
               NEED_ISSUE=1
-              echo "Certificate file not found in container."
+              log "Certificate file not found in container."
             else
               # If the cert exists but is for a different domain, browsers show "not secure".
               if ! docker exec "$CONTAINER" sh -c "openssl x509 -in /etc/letsencrypt/live/$DOMAIN/fullchain.pem -noout -text | grep -q \"$DOMAIN\""; then
                 NEED_ISSUE=1
-                echo "Existing certificate does not look like it matches $DOMAIN. Will re-issue."
+                log "Existing certificate does not look like it matches $DOMAIN. Will re-issue."
               else
-                echo "Certificate exists and appears to match $DOMAIN."
+                log "Certificate exists and appears to match $DOMAIN."
               fi
             fi
 
             if [ "$NEED_ISSUE" -eq 1 ]; then
-              echo "Issuing/renewing certificate via certbot (docker, using SAME volumes as nginx)..."
+              log "Issuing/renewing certificate via certbot (docker, using SAME volumes as nginx)..."
 
               # Determine host mount paths used by the nginx container for letsencrypt + webroot.
               LE_HOST="$(docker inspect "$CONTAINER" --format '{{range .Mounts}}{{if eq .Destination "/etc/letsencrypt"}}{{.Source}}{{end}}{{end}}')"
               WEB_HOST="$(docker inspect "$CONTAINER" --format '{{range .Mounts}}{{if eq .Destination "/var/www/certbot"}}{{.Source}}{{end}}{{end}}')"
 
-              echo "Detected mounts:"
-              echo "  /etc/letsencrypt -> ${LE_HOST:-<not mounted>}"
-              echo "  /var/www/certbot -> ${WEB_HOST:-<not mounted>}"
+              log "Detected mounts:"
+              log "  /etc/letsencrypt -> ${LE_HOST:-<not mounted>}"
+              log "  /var/www/certbot -> ${WEB_HOST:-<not mounted>}"
 
               # Fallback to known host paths used by poster-mapping-deploy compose.
               if [ -z "$LE_HOST" ] && [ -d "/opt/poster-mapping-deploy/certbot/conf" ]; then
                 LE_HOST="/opt/poster-mapping-deploy/certbot/conf"
-                echo "Fallback LE_HOST=$LE_HOST"
+                log "Fallback LE_HOST=$LE_HOST"
               fi
               if [ -z "$WEB_HOST" ] && [ -d "/opt/poster-mapping-deploy/certbot/www" ]; then
                 WEB_HOST="/opt/poster-mapping-deploy/certbot/www"
-                echo "Fallback WEB_HOST=$WEB_HOST"
+                log "Fallback WEB_HOST=$WEB_HOST"
               fi
 
               if [ -z "$LE_HOST" ] || [ -z "$WEB_HOST" ]; then
-                echo "ERROR: Cannot determine letsencrypt/webroot volume mounts for certbot."
-                echo "Please ensure nginx container mounts /etc/letsencrypt and /var/www/certbot, or adjust fallback paths."
+                log "ERROR: Cannot determine letsencrypt/webroot volume mounts for certbot."
+                log "Please ensure nginx container mounts /etc/letsencrypt and /var/www/certbot, or adjust fallback paths."
                 exit 1
               fi
 
@@ -166,14 +180,14 @@ jobs:
                 --agree-tos --non-interactive --force-renewal --email "admin@kanazawa-application-support.jp"
             fi
 
-            echo "Step 5.5: Show certificate details (debug)"
+            log "Step 5.5: Show certificate details (debug)"
             docker exec "$CONTAINER" sh -c "ls -la /etc/letsencrypt/live/$DOMAIN || true"
             docker exec "$CONTAINER" sh -c "openssl x509 -in /etc/letsencrypt/live/$DOMAIN/fullchain.pem -noout -subject -issuer -startdate -enddate || true"
 
-            echo "Step 6: Test Nginx configuration"
+            log "Step 6: Test Nginx configuration"
             docker exec "$CONTAINER" nginx -t
 
-            echo "Step 7: Reload Nginx"
+            log "Step 7: Reload Nginx"
             docker exec "$CONTAINER" nginx -s reload
 
             echo "Step 7.5: (non-fatal) Ensure taskmap DB/API are running"
