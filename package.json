@@ -2,12 +2,13 @@
   "name": "task-map",
   "private": true,
   "version": "0.0.1",
-  "type": "module",
-  "scripts": {
-  "build": "tsc",
-  "test": "jest",
-  "test:ci": "jest --runInBand"
-},
+    "scripts": {
+    "dev": "vite",
+    "build": "node ./node_modules/typescript/bin/tsc -p tsconfig.json --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "jest",
+    "test:ci": "jest --runInBand"
+  },
   "dependencies": {
     "classnames": "^2.5.1",
     "dayjs": "^1.11.13",
@@ -28,7 +29,6 @@
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.10",
     "ts-jest": "^29.4.5",
-    "ts-node": "^10.9.2",
     "typescript": "^5.9.3",
     "vite": "^5.4.6"
   },
