@@ -7,6 +7,9 @@ export const MobileTaskSheet: React.FC<{ isOpen: boolean; onClose: () => void }>
   const users = useAppStore((s) => s.users)
   const updateTask = useAppStore((s) => s.updateTask)
   const addChild = useAppStore((s) => s.addChild)
+  const setFocusTask = useAppStore((s) => s.setFocusTask)
+  const addRipple = useAppStore((s) => s.addRipple)
+  const setMobileSheetTaskId = useAppStore((s) => s.setMobileSheetTaskId)
 
   const assigneeOptions = useMemo(() => Object.values(users), [users])
 
@@ -95,7 +98,15 @@ export const MobileTaskSheet: React.FC<{ isOpen: boolean; onClose: () => void }>
               className="flex-1 bg-slate-900 text-white rounded-lg py-3 text-base"
               onClick={() => {
                 const child = addChild(taskId, { title: '新しいタスク' })
+                // 親を展開し、子を見える位置へ。追加したことが分かるようにフォーカス＆ハイライト。
+                updateTask(taskId, { expanded: true } as any)
                 updateTask(child.id, { position: { x: (task.position?.x ?? 0) + 220, y: (task.position?.y ?? 0) } } as any)
+                addRipple(child.id)
+                setFocusTask(child.id)
+                setMobileSheetTaskId(child.id)
+                try {
+                  ;(navigator as any).vibrate?.(15)
+                } catch {}
               }}
             >
               子タスク追加

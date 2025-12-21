@@ -30,6 +30,7 @@ export const TaskNode: React.FC<Props> = ({ id, data, skipHandles = false }) => 
     const updateTask = useAppStore((s) => s.updateTask)
     const toggleExpand = useAppStore((s) => s.toggleExpand)
     const setMobileSheetTaskId = useAppStore((s) => s.setMobileSheetTaskId)
+    const mobileMoveMode = useAppStore((s) => (s as any).mobileMoveMode as boolean)
     const isMobile = useIsMobile()
     const draggingId = useAppStore((s) => s.draggingId)
     const ripples = useAppStore((s) => s.ripples)
@@ -270,7 +271,7 @@ export const TaskNode: React.FC<Props> = ({ id, data, skipHandles = false }) => 
                 </>
             )}
             {/* モバイル: ノード全体タップで編集シートを開く */}
-            {isMobile && (
+            {isMobile && !mobileMoveMode && (
                 <button
                     type="button"
                     className="absolute inset-0 z-10 nodrag nopan"

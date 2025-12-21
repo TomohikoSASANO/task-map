@@ -5,6 +5,7 @@ import { FloatingEdge } from './components/edges/FloatingEdge'
 import { TaskNode } from './components/TaskNode'
 import { useAppStore } from './store'
 import { useCollabContext } from './sync/collab'
+import { useIsMobile } from './hooks/useIsMobile'
 
 const nodeTypes = { task: TaskNode }
 const edgeTypes = { floating: FloatingEdge }
@@ -12,6 +13,9 @@ const edgeTypes = { floating: FloatingEdge }
 export const Canvas: React.FC = () => {
     const graph = useAppStore((s) => ({ tasks: s.tasks, rootTaskIds: s.rootTaskIds }))
     const focusTaskId = useAppStore((s) => (s as any).focusTaskId as string | null)
+    const isMobile = useIsMobile()
+    const mobileMoveMode = useAppStore((s) => (s as any).mobileMoveMode as boolean)
+    const setMobileMoveMode = useAppStore((s) => (s as any).setMobileMoveMode as (v: boolean) => void)
     const setDragging = useAppStore((s) => s.setDragging)
     const addRipple = useAppStore((s) => s.addRipple)
     const clearOldRipples = useAppStore((s) => s.clearOldRipples)
@@ -434,17 +438,38 @@ export const Canvas: React.FC = () => {
                         )
                     })}
             </div>
+            {/* Mobile quick controls: center + edit/move mode */}
+            {isMobile && (
+                <div className="fixed bottom-24 right-4 z-50 flex flex-col gap-2">
+                    <button
+                        type="button"
+                        className="px-3 py-2 rounded-full bg-white/95 border shadow text-sm"
+                        onClick={() => { try { rf.fitView({ padding: 0.2, duration: 300 } as any) } catch { } }}
+                        aria-label="中心に戻す"
+                    >
+                        中心
+                    </button>
+                    <button
+                        type="button"
+                        className={`px-3 py-2 rounded-full border shadow text-sm ${mobileMoveMode ? 'bg-slate-900 text-white' : 'bg-white/95'}`}
+                        onClick={() => setMobileMoveMode(!mobileMoveMode)}
+                        aria-label="編集/移動モード切替"
+                    >
+                        {mobileMoveMode ? '移動中' : '編集'}
+                    </button>
+                </div>
+            )}
             <ReactFlow
                 nodes={nodes}
                 edges={edges}
                 nodeTypes={nodeTypes}
                 edgeTypes={edgeTypes}
-                selectionOnDrag={true}
+                selectionOnDrag={!isMobile}
                 multiSelectionKeyCode={null as unknown as any}
-                panOnDrag={false}
-                nodesDraggable={!isCtrlDown}
-                nodesConnectable={!isCtrlDown}
-                elementsSelectable={true}
+                panOnDrag={isMobile ? true : false}
+                nodesDraggable={isMobile ? mobileMoveMode : !isCtrlDown}
+                nodesConnectable={!isMobile && !isCtrlDown}
+                elementsSelectable={!isMobile}
                 selectNodesOnDrag={false}
                 panOnScroll
                 zoomOnDoubleClick={false}

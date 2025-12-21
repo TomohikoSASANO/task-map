@@ -43,6 +43,8 @@ export type AppState = Graph & Derived & Actions & {
     setFocusTask(id: TaskId | null): void
     mobileSheetTaskId: TaskId | null
     setMobileSheetTaskId(id: TaskId | null): void
+    mobileMoveMode: boolean
+    setMobileMoveMode(v: boolean): void
 }
 
 const defaultUsers: Record<string, User> = {
@@ -97,11 +99,13 @@ export const useAppStore = create<AppState>()(
             ripples: [],
             focusTaskId: null,
             mobileSheetTaskId: null,
+            mobileMoveMode: false,
             setDragging: (id) => set(() => ({ draggingId: id })),
             addRipple: (nodeId) => set((s) => ({ ripples: [...s.ripples, { id: generateId('rp'), nodeId, createdAt: Date.now() }] })),
             clearOldRipples: () => set((s) => ({ ripples: s.ripples.filter((r) => Date.now() - r.createdAt < 1000) })),
             setFocusTask: (id) => set(() => ({ focusTaskId: id })),
             setMobileSheetTaskId: (id) => set(() => ({ mobileSheetTaskId: id })),
+            setMobileMoveMode: (v) => set(() => ({ mobileMoveMode: v })),
             remainingDays: (taskId) => {
                 const t = get().tasks[taskId]
                 return t ? computeRemainingDays(t.deadline.dateISO) : null
