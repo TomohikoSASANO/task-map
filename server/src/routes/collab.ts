@@ -29,16 +29,6 @@ const MAPS = new Map<string, ServerMapState>() // key: mapKey (slug)
 
 const DEFAULT_GRAPH: Graph = { users: {}, tasks: {}, rootTaskIds: [] }
 
-const WS_DEBUG = {
-  connectCount: 0,
-  initSentCount: 0,
-  lastConnectAt: 0,
-  lastRawUrl: '',
-  lastMapKey: '',
-  lastClientId: '',
-  lastError: '',
-}
-
 async function ensureSystemMap(mapKey: string): Promise<{ mapId: string }> {
   const systemEmail = process.env.SYSTEM_USER_EMAIL || 'system@taskmap.local'
   const workspaceName = process.env.DEFAULT_WORKSPACE_NAME || 'Public Workspace'
@@ -105,11 +95,6 @@ function broadcast(mapKey: string, msg: any, exceptClientId?: string) {
 export async function collabRoutes(app: FastifyInstance) {
   await app.register(websocket)
 
-  // Debug endpoint for diagnosing websocket failures (safe to keep, but can be removed later).
-  app.get('/api/ws-debug', async (_req, reply) => {
-    return reply.send({ ok: true, ...WS_DEBUG })
-  })
-
   // GET current graph (for initial load)
   app.get('/api/maps/:mapKey', async (req, reply) => {
     const mapKey = (req.params as any).mapKey as string
@@ -133,27 +118,21 @@ export async function collabRoutes(app: FastifyInstance) {
     // Avoid `async` websocket handler; some versions close the socket when the handler promise resolves.
     ;(async () => {
       const ws: any = (conn as any)?.socket ?? conn
-      WS_DEBUG.connectCount += 1
-      WS_DEBUG.lastConnectAt = Date.now()
-      WS_DEBUG.lastError = ''
 
       // NOTE: Depending on fastify/websocket versions, `req` may be FastifyRequest or raw IncomingMessage-like.
       // We parse from URL to be robust.
       const rawUrl: string = (req?.raw?.url as string) || (req?.url as string) || ''
-      WS_DEBUG.lastRawUrl = rawUrl
       const urlObj = new URL(rawUrl.startsWith('http') ? rawUrl : `http://local${rawUrl}`)
 
       const mapKey =
         ((req?.params as any)?.mapKey as string) ||
         urlObj.pathname.split('/').filter(Boolean).slice(-1)[0] ||
         'default'
-      WS_DEBUG.lastMapKey = mapKey
 
       const q = Object.fromEntries(urlObj.searchParams.entries()) as Record<string, string>
       const headers = (req?.headers as any) || (req?.raw?.headers as any) || {}
 
       const clientId = (q.clientId as string) || (headers['x-client-id'] as string) || ''
-      WS_DEBUG.lastClientId = clientId
       const name = (q.name as string) || (headers['x-client-name'] as string) || 'Anonymous'
       const color = (q.color as string) || (headers['x-client-color'] as string) || '#0ea5e9'
 
@@ -191,7 +170,6 @@ export async function collabRoutes(app: FastifyInstance) {
         graph: st.graph,
         peers: Array.from(st.peers.values()),
       })
-      WS_DEBUG.initSentCount += 1
       broadcast(mapKey, { type: 'peer:join', peer: st.peers.get(clientId) }, clientId)
 
       ws?.on?.('message', async (raw: any) => {
@@ -253,9 +231,10 @@ export async function collabRoutes(app: FastifyInstance) {
         }
       })
     })().catch((err) => {
-      WS_DEBUG.lastError = String(err?.message || err || 'unknown_error')
+      // best-effort close (connection might already be gone)
       try {
-        ;(conn.socket as any).close?.(1011, 'server_error')
+        const ws: any = (conn as any)?.socket ?? conn
+        ws?.close?.(1011, 'server_error')
       } catch {}
     })
   })
