@@ -115,15 +115,30 @@ export async function collabRoutes(app: FastifyInstance) {
   // WS: realtime collaboration
   // @ts-ignore - @fastify/websocket route option types
   app.get('/ws/:mapKey', { websocket: true }, async (conn, req: any) => {
-    const mapKey = (req.params as any)?.mapKey as string
-    const q = (req.query as any) || {}
-    const clientId = (q.clientId as string) || ((req.headers as any)?.['x-client-id'] as string) || ''
-    const name = (q.name as string) || ((req.headers as any)?.['x-client-name'] as string) || 'Anonymous'
-    const color = (q.color as string) || ((req.headers as any)?.['x-client-color'] as string) || '#0ea5e9'
+    // NOTE: Depending on fastify/websocket versions, `req` may be FastifyRequest or raw IncomingMessage-like.
+    // We parse from URL to be robust.
+    const rawUrl: string = (req?.raw?.url as string) || (req?.url as string) || ''
+    const urlObj = new URL(rawUrl.startsWith('http') ? rawUrl : `http://local${rawUrl}`)
+
+    const mapKey =
+      ((req?.params as any)?.mapKey as string) ||
+      urlObj.pathname.split('/').filter(Boolean).slice(-1)[0] ||
+      'default'
+
+    const q = Object.fromEntries(urlObj.searchParams.entries()) as Record<string, string>
+    const headers = (req?.headers as any) || (req?.raw?.headers as any) || {}
+
+    const clientId = (q.clientId as string) || (headers['x-client-id'] as string) || ''
+    const name = (q.name as string) || (headers['x-client-name'] as string) || 'Anonymous'
+    const color = (q.color as string) || (headers['x-client-color'] as string) || '#0ea5e9'
 
     if (!clientId) {
       wsSend(conn.socket, { type: 'error', error: 'missing_client_id' })
-      ;(conn.socket as any).close()
+      try {
+        ;(conn.socket as any).close?.(1008, 'missing_client_id')
+      } catch {
+        ;(conn.socket as any).close?.()
+      }
       return
     }
 
@@ -213,6 +228,9 @@ export async function collabRoutes(app: FastifyInstance) {
     })
   })
 }
+
+
+
 
 
 

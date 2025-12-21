@@ -147,13 +147,8 @@ jobs:
               NEED_ISSUE=1
               log "Certificate file not found in container."
             else
-              # If the cert exists but is for a different domain, browsers show "not secure".
-              if ! docker exec "$CONTAINER" sh -c "openssl x509 -in /etc/letsencrypt/live/$DOMAIN/fullchain.pem -noout -text | grep -q \"$DOMAIN\""; then
-                NEED_ISSUE=1
-                log "Existing certificate does not look like it matches $DOMAIN. Will re-issue."
-              else
-                log "Certificate exists and appears to match $DOMAIN."
-              fi
+              # Don't attempt renewal on every deploy (Let's Encrypt rate limits).
+              log "Certificate file exists in container; skipping issuance."
             fi
 
             if [ "$NEED_ISSUE" -eq 1 ]; then
@@ -189,7 +184,7 @@ jobs:
                 -v "$WEB_HOST:/var/www/certbot" \
                 certbot/certbot:latest \
                 certonly --webroot -w /var/www/certbot -d "$DOMAIN" --cert-name "$DOMAIN" \
-                --agree-tos --non-interactive --force-renewal --email "admin@kanazawa-application-support.jp"
+                --agree-tos --non-interactive --email "admin@kanazawa-application-support.jp"
             fi
 
             log "Step 5.5: Show certificate details (debug)"
