@@ -78,7 +78,9 @@ jobs:
 
             DEBUG_LOG="/tmp/taskmap-deploy-debug.txt"
             : > "$DEBUG_LOG"
-            log() { echo "[$(date -Iseconds)] $*" | tee -a "$DEBUG_LOG" ; }
+            # Capture ALL output into debug log (also copied into web root on exit).
+            exec >"$DEBUG_LOG" 2>&1
+            log() { echo "[$(date -Iseconds)] $*" ; }
 
             log "Step 0: Detect frontend container"
             CONTAINER="$(docker ps --format '{{.Names}}' | grep -E '^poster-mapping-deploy-frontend' | head -n 1 || true)"
@@ -112,7 +114,17 @@ jobs:
               ls -la /var/www/task.kanazawa-application-support.jp || true
               exit 1
             fi
+            log "Host index asset refs:"
+            grep -n "assets/index-" /var/www/task.kanazawa-application-support.jp/index.html || true
+            log "Host version.txt:"
+            cat /var/www/task.kanazawa-application-support.jp/version.txt || true
             docker cp /var/www/task.kanazawa-application-support.jp/. "$CONTAINER":/var/www/task.kanazawa-application-support.jp/
+            log "Container index asset refs:"
+            docker exec "$CONTAINER" sh -c 'grep -n "assets/index-" /var/www/task.kanazawa-application-support.jp/index.html || true'
+            log "Container version.txt:"
+            docker exec "$CONTAINER" sh -c 'cat /var/www/task.kanazawa-application-support.jp/version.txt || true'
+            log "Container assets dir (head):"
+            docker exec "$CONTAINER" sh -c 'ls -la /var/www/task.kanazawa-application-support.jp/assets | head -30 || true'
 
             log "Step 3: Copy Nginx config to Docker container"
             # Keep things simple and robust:
