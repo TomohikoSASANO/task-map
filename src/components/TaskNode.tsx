@@ -46,6 +46,7 @@ export const TaskNode: React.FC<Props> = ({ id, data, skipHandles = false }) => 
     const holdTimerRef = useRef<number | null>(null)
     const holdActivatedRef = useRef(false)
     const startPosRef = useRef<{ x: number; y: number } | null>(null)
+    const [holdUi, setHoldUi] = useState<'idle' | 'pressing' | 'active'>('idle')
 
     useEffect(() => { if (memoOpen && memoRef.current) memoRef.current.focus() }, [memoOpen])
     // タスク名が外部更新された場合、未編集中のみドラフトを追従
@@ -66,6 +67,7 @@ export const TaskNode: React.FC<Props> = ({ id, data, skipHandles = false }) => 
 
     const isDragging = draggingId === id
     const hasRipple = ripples.some((r) => r.nodeId === id)
+    const isHoldActive = isMobile && (mobileHoldDragId === id || holdUi === 'active')
 
     const isHighlight = !!data.highlight
     // タスクが削除済みの一時描画タイミングで安全に抜ける（フック呼び出し後に判定）
@@ -114,7 +116,9 @@ export const TaskNode: React.FC<Props> = ({ id, data, skipHandles = false }) => 
                     `relative overflow-visible rounded-md border ${hasAssignee ? 'pl-12 pr-2' : 'px-2'} py-1 bg-white shadow-sm text-sm ` +
                     borderClass + ' ' +
                     (isDone ? 'ring-1 ring-emerald-300 ' : '') +
-                    (isHighlight ? 'outline outline-2 outline-sky-400' : '')
+                    (isHighlight ? 'outline outline-2 outline-sky-400 ' : '') +
+                    (isMobile && holdUi === 'pressing' ? 'ring-2 ring-slate-300 ' : '') +
+                    (isHoldActive ? 'ring-2 ring-sky-500 shadow-md ' : '')
                 )
             })()}
             onDragOver={(e) => {
@@ -131,6 +135,17 @@ export const TaskNode: React.FC<Props> = ({ id, data, skipHandles = false }) => 
             }}
         >
             <Ripple active={hasRipple} />
+            {/* モバイル: 長押し状態のフィードバック */}
+            {isMobile && holdUi === 'pressing' && (
+                <div className="pointer-events-none absolute -top-2 left-1/2 -translate-x-1/2 z-40 text-[10px] px-2 py-0.5 rounded-full bg-white/95 border shadow text-slate-700">
+                    長押し中…
+                </div>
+            )}
+            {isMobile && isHoldActive && (
+                <div className="pointer-events-none absolute -top-2 left-1/2 -translate-x-1/2 z-40 text-[10px] px-2 py-0.5 rounded-full bg-sky-600 text-white shadow">
+                    ドラッグで移動
+                </div>
+            )}
             {/* 上段: 担当者表示 */}
             {/* 担当者アイコンを左上に大きく・最前面で表示（ノード内に収めてパン誤爆防止） */}
             {hasAssignee && assignee && (
@@ -286,10 +301,15 @@ export const TaskNode: React.FC<Props> = ({ id, data, skipHandles = false }) => 
                         e.stopPropagation()
                         holdActivatedRef.current = false
                         startPosRef.current = { x: e.clientX, y: e.clientY }
+                        setHoldUi('pressing')
                         if (holdTimerRef.current) window.clearTimeout(holdTimerRef.current)
                         holdTimerRef.current = window.setTimeout(() => {
                             holdActivatedRef.current = true
+                            setHoldUi('active')
                             setMobileHoldDragId(id)
+                            try {
+                                ;(navigator as any).vibrate?.(12)
+                            } catch {}
                         }, 320)
                     }}
                     onPointerMove={(e) => {
@@ -300,6 +320,7 @@ export const TaskNode: React.FC<Props> = ({ id, data, skipHandles = false }) => 
                         if (dx + dy > 10) {
                             if (holdTimerRef.current) window.clearTimeout(holdTimerRef.current)
                             holdTimerRef.current = null
+                            if (holdUi === 'pressing') setHoldUi('idle')
                         }
                     }}
                     onPointerUp={(e) => {
@@ -313,8 +334,10 @@ export const TaskNode: React.FC<Props> = ({ id, data, skipHandles = false }) => 
                         startPosRef.current = null
                         if (wasHold) {
                             if (mobileHoldDragId === id) setMobileHoldDragId(null)
+                            setHoldUi('idle')
                             return
                         }
+                        setHoldUi('idle')
                         if (!mobileMoveMode) setMobileSheetTaskId(id)
                     }}
                     onPointerCancel={() => {
@@ -323,6 +346,7 @@ export const TaskNode: React.FC<Props> = ({ id, data, skipHandles = false }) => 
                         holdActivatedRef.current = false
                         startPosRef.current = null
                         if (mobileHoldDragId === id) setMobileHoldDragId(null)
+                        setHoldUi('idle')
                     }}
                     onContextMenu={(e) => e.preventDefault()}
                 />
