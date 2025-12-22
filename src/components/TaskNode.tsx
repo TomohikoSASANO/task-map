@@ -31,6 +31,8 @@ export const TaskNode: React.FC<Props> = ({ id, data, skipHandles = false }) => 
     const toggleExpand = useAppStore((s) => s.toggleExpand)
     const setMobileSheetTaskId = useAppStore((s) => s.setMobileSheetTaskId)
     const mobileMoveMode = useAppStore((s) => (s as any).mobileMoveMode as boolean)
+    const mobileHoldDragId = useAppStore((s) => (s as any).mobileHoldDragId as string | null)
+    const setMobileHoldDragId = useAppStore((s) => (s as any).setMobileHoldDragId as (id: string | null) => void)
     const isMobile = useIsMobile()
     const draggingId = useAppStore((s) => s.draggingId)
     const ripples = useAppStore((s) => s.ripples)
@@ -41,6 +43,9 @@ export const TaskNode: React.FC<Props> = ({ id, data, skipHandles = false }) => 
     const isComposingRef = useRef(false)
     const memoRef = useRef<HTMLTextAreaElement | null>(null)
     const toggleHandledRef = useRef<boolean>(false)
+    const holdTimerRef = useRef<number | null>(null)
+    const holdActivatedRef = useRef(false)
+    const startPosRef = useRef<{ x: number; y: number } | null>(null)
 
     useEffect(() => { if (memoOpen && memoRef.current) memoRef.current.focus() }, [memoOpen])
     // タスク名が外部更新された場合、未編集中のみドラフトを追従
@@ -271,13 +276,55 @@ export const TaskNode: React.FC<Props> = ({ id, data, skipHandles = false }) => 
                 </>
             )}
             {/* モバイル: ノード全体タップで編集シートを開く */}
-            {isMobile && !mobileMoveMode && (
-                <button
-                    type="button"
+            {isMobile && (
+                <div
                     className="absolute inset-0 z-10 nodrag nopan"
-                    style={{ background: 'transparent' }}
-                    onClick={(e) => { e.stopPropagation(); setMobileSheetTaskId(id) }}
+                    style={{ background: 'transparent', touchAction: 'manipulation' }}
                     aria-label="タスク編集"
+                    onPointerDown={(e) => {
+                        // 長押し: その間だけ移動（指を離したら戻る）
+                        e.stopPropagation()
+                        holdActivatedRef.current = false
+                        startPosRef.current = { x: e.clientX, y: e.clientY }
+                        if (holdTimerRef.current) window.clearTimeout(holdTimerRef.current)
+                        holdTimerRef.current = window.setTimeout(() => {
+                            holdActivatedRef.current = true
+                            setMobileHoldDragId(id)
+                        }, 320)
+                    }}
+                    onPointerMove={(e) => {
+                        // 少しでも動いたら長押し判定をキャンセル（＝パンに委ねる）
+                        if (!startPosRef.current) return
+                        const dx = Math.abs(e.clientX - startPosRef.current.x)
+                        const dy = Math.abs(e.clientY - startPosRef.current.y)
+                        if (dx + dy > 10) {
+                            if (holdTimerRef.current) window.clearTimeout(holdTimerRef.current)
+                            holdTimerRef.current = null
+                        }
+                    }}
+                    onPointerUp={(e) => {
+                        e.stopPropagation()
+                        if (holdTimerRef.current) window.clearTimeout(holdTimerRef.current)
+                        holdTimerRef.current = null
+
+                        // 長押し移動中なら解除。そうでなければタップ編集。
+                        const wasHold = holdActivatedRef.current || mobileHoldDragId === id
+                        holdActivatedRef.current = false
+                        startPosRef.current = null
+                        if (wasHold) {
+                            if (mobileHoldDragId === id) setMobileHoldDragId(null)
+                            return
+                        }
+                        if (!mobileMoveMode) setMobileSheetTaskId(id)
+                    }}
+                    onPointerCancel={() => {
+                        if (holdTimerRef.current) window.clearTimeout(holdTimerRef.current)
+                        holdTimerRef.current = null
+                        holdActivatedRef.current = false
+                        startPosRef.current = null
+                        if (mobileHoldDragId === id) setMobileHoldDragId(null)
+                    }}
+                    onContextMenu={(e) => e.preventDefault()}
                 />
             )}
         </motion.div>

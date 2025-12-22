@@ -14,8 +14,8 @@ export const Canvas: React.FC = () => {
     const graph = useAppStore((s) => ({ tasks: s.tasks, rootTaskIds: s.rootTaskIds }))
     const focusTaskId = useAppStore((s) => (s as any).focusTaskId as string | null)
     const isMobile = useIsMobile()
-    const mobileMoveMode = useAppStore((s) => (s as any).mobileMoveMode as boolean)
-    const setMobileMoveMode = useAppStore((s) => (s as any).setMobileMoveMode as (v: boolean) => void)
+    const mobileHoldDragId = useAppStore((s) => (s as any).mobileHoldDragId as string | null)
+    const setMobileHoldDragId = useAppStore((s) => (s as any).setMobileHoldDragId as (id: string | null) => void)
     const setDragging = useAppStore((s) => s.setDragging)
     const addRipple = useAppStore((s) => s.addRipple)
     const clearOldRipples = useAppStore((s) => s.clearOldRipples)
@@ -46,6 +46,7 @@ export const Canvas: React.FC = () => {
     const { collab, sendPresence } = useCollabContext()
     const containerRef = useRef<HTMLDivElement | null>(null)
     const presencePeers = collab.peers
+    const holdDragRef = useRef<{ id: string; dx: number; dy: number } | null>(null)
 
 
     const snapshotGraph = () => {
@@ -375,6 +376,56 @@ export const Canvas: React.FC = () => {
         }
     }, [rf, candidateId, graph.tasks, createTask, updateTask])
 
+    // Mobile: long-press hold-to-drag (temporary node move)
+    useEffect(() => {
+        if (!isMobile) return
+        if (!mobileHoldDragId) {
+            holdDragRef.current = null
+            return
+        }
+
+        const n = rf.getNode(mobileHoldDragId)
+        if (!n) {
+            setMobileHoldDragId(null)
+            return
+        }
+
+        const onMove = (e: PointerEvent) => {
+            if (!mobileHoldDragId) return
+            // initialize offset on first move
+            if (!holdDragRef.current) {
+                const p0 = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY })
+                const n0 = rf.getNode(mobileHoldDragId)
+                if (!n0) return
+                holdDragRef.current = {
+                    id: mobileHoldDragId,
+                    dx: p0.x - (n0.position?.x ?? 0),
+                    dy: p0.y - (n0.position?.y ?? 0),
+                }
+            }
+            const off = holdDragRef.current
+            if (!off) return
+            const p = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY })
+            useAppStore.getState().setNodePosition(mobileHoldDragId, p.x - off.dx, p.y - off.dy)
+            e.preventDefault()
+        }
+
+        const stop = () => {
+            holdDragRef.current = null
+            setMobileHoldDragId(null)
+        }
+
+        window.addEventListener('pointermove', onMove, { passive: false })
+        window.addEventListener('pointerup', stop, { passive: true })
+        window.addEventListener('pointercancel', stop, { passive: true })
+
+        return () => {
+            window.removeEventListener('pointermove', onMove as any)
+            window.removeEventListener('pointerup', stop as any)
+            window.removeEventListener('pointercancel', stop as any)
+        }
+    }, [isMobile, mobileHoldDragId])
+
     return (
         <div
             ref={containerRef}
@@ -438,7 +489,7 @@ export const Canvas: React.FC = () => {
                         )
                     })}
             </div>
-            {/* Mobile quick controls: center + edit/move mode */}
+            {/* Mobile quick controls: center */}
             {isMobile && (
                 <div className="fixed bottom-24 right-4 z-50 flex flex-col gap-2">
                     <button
@@ -448,14 +499,6 @@ export const Canvas: React.FC = () => {
                         aria-label="中心に戻す"
                     >
                         中心
-                    </button>
-                    <button
-                        type="button"
-                        className={`px-3 py-2 rounded-full border shadow text-sm ${mobileMoveMode ? 'bg-slate-900 text-white' : 'bg-white/95'}`}
-                        onClick={() => setMobileMoveMode(!mobileMoveMode)}
-                        aria-label="編集/移動モード切替"
-                    >
-                        {mobileMoveMode ? '移動中' : '編集'}
                     </button>
                 </div>
             )}
@@ -467,7 +510,7 @@ export const Canvas: React.FC = () => {
                 selectionOnDrag={!isMobile}
                 multiSelectionKeyCode={null as unknown as any}
                 panOnDrag={isMobile ? true : false}
-                nodesDraggable={isMobile ? mobileMoveMode : !isCtrlDown}
+                nodesDraggable={!isMobile && !isCtrlDown}
                 nodesConnectable={!isMobile && !isCtrlDown}
                 elementsSelectable={!isMobile}
                 selectNodesOnDrag={false}
