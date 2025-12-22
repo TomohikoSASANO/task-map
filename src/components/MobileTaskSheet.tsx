@@ -1,9 +1,10 @@
-import React, { useMemo } from 'react'
+import React, { useMemo, useState } from 'react'
 import { useAppStore } from '../store'
 
 export const MobileTaskSheet: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
   const taskId = useAppStore((s) => s.mobileSheetTaskId)
   const task = useAppStore((s) => (taskId ? s.tasks[taskId] : null))
+  const tasks = useAppStore((s) => s.tasks)
   const users = useAppStore((s) => s.users)
   const updateTask = useAppStore((s) => s.updateTask)
   const addChild = useAppStore((s) => s.addChild)
@@ -11,9 +12,70 @@ export const MobileTaskSheet: React.FC<{ isOpen: boolean; onClose: () => void }>
   const addRipple = useAppStore((s) => s.addRipple)
   const setMobileSheetTaskId = useAppStore((s) => s.setMobileSheetTaskId)
 
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [deleteInfo, setDeleteInfo] = useState<{ count: number; incompleteTitles: string[] } | null>(null)
+
   const assigneeOptions = useMemo(() => Object.values(users), [users])
 
   if (!isOpen || !taskId || !task) return null
+
+  const openDeleteConfirm = () => {
+    const collect = (id: string, acc: string[] = []): string[] => {
+      const t: any = (tasks as any)[id]
+      if (!t) return acc
+      ;(t.children ?? []).forEach((cid: string) => collect(cid, acc))
+      acc.push(id)
+      return acc
+    }
+    const ids = collect(taskId, [])
+    const incomplete = ids
+      .map((id) => (tasks as any)[id])
+      .filter((t: any) => t && !t.done)
+      .map((t: any) => String(t.title || ''))
+      .filter(Boolean)
+
+    setDeleteInfo({ count: ids.length, incompleteTitles: incomplete })
+    setDeleteConfirmOpen(true)
+  }
+
+  const doDelete = () => {
+    const cur = useAppStore.getState()
+    const tasks0: any = { ...cur.tasks }
+    const rootTaskIds: string[] = [...cur.rootTaskIds]
+
+    const deletedIds: string[] = []
+    const removeRecursive = (id: string) => {
+      const t: any = tasks0[id]
+      if (!t) return
+      ;(t.children ?? []).forEach((cid: string) => removeRecursive(cid))
+      deletedIds.push(id)
+      if (t.parentId && tasks0[t.parentId]) {
+        tasks0[t.parentId] = { ...tasks0[t.parentId], children: (tasks0[t.parentId].children ?? []).filter((cid: string) => cid !== id) }
+      }
+      const idx = rootTaskIds.indexOf(id)
+      if (idx >= 0) rootTaskIds.splice(idx, 1)
+      delete tasks0[id]
+    }
+
+    removeRecursive(taskId)
+    const deletedSet = new Set(deletedIds)
+    Object.keys(tasks0).forEach((id) => {
+      const t: any = tasks0[id]
+      if (!t) return
+      if (Array.isArray(t.dependsOn) && t.dependsOn.some((d: string) => deletedSet.has(d))) {
+        tasks0[id] = { ...t, dependsOn: t.dependsOn.filter((d: string) => !deletedSet.has(d)) }
+      }
+      if (t.parentId && deletedSet.has(t.parentId)) {
+        tasks0[id] = { ...tasks0[id], parentId: null }
+        rootTaskIds.push(id)
+      }
+    })
+
+    cur.setGraph({ tasks: tasks0, users: cur.users, rootTaskIds })
+    setDeleteConfirmOpen(false)
+    setDeleteInfo(null)
+    setMobileSheetTaskId(null)
+  }
 
   return (
     <div className="fixed inset-0 z-[60]">
@@ -95,6 +157,13 @@ export const MobileTaskSheet: React.FC<{ isOpen: boolean; onClose: () => void }>
           <div className="flex gap-2 mt-4">
             <button
               type="button"
+              className="px-4 rounded-lg border border-rose-500 text-rose-600 py-3 text-base"
+              onClick={openDeleteConfirm}
+            >
+              削除
+            </button>
+            <button
+              type="button"
               className="flex-1 bg-slate-900 text-white rounded-lg py-3 text-base"
               onClick={() => {
                 const child = addChild(taskId, { title: '新しいタスク' })
@@ -117,7 +186,41 @@ export const MobileTaskSheet: React.FC<{ isOpen: boolean; onClose: () => void }>
           </div>
         </div>
       </div>
+
+      {deleteConfirmOpen && (
+        <div className="fixed inset-0 z-[70]">
+          <button type="button" className="absolute inset-0 bg-black/50" onClick={() => setDeleteConfirmOpen(false)} aria-label="削除キャンセル" />
+          <div className="absolute left-4 right-4 top-24 bg-white rounded-2xl shadow-xl border p-4">
+            <div className="font-semibold text-base text-rose-600">削除の確認</div>
+            <div className="mt-2 text-sm text-slate-700">
+              このタスクと子ノードを含む <span className="font-semibold">{deleteInfo?.count ?? 0}件</span> を削除します。元に戻せません。
+            </div>
+            {(deleteInfo?.incompleteTitles?.length ?? 0) > 0 && (
+              <div className="mt-3 text-sm text-slate-700">
+                <div className="font-semibold text-rose-600">未完了タスクが含まれます</div>
+                <div className="mt-1 max-h-28 overflow-auto border rounded-lg p-2 bg-slate-50">
+                  {(deleteInfo?.incompleteTitles ?? []).slice(0, 12).map((t, i) => (
+                    <div key={`${i}-${t}`} className="truncate">- {t}</div>
+                  ))}
+                  {(deleteInfo?.incompleteTitles?.length ?? 0) > 12 && (
+                    <div className="text-slate-500">…他 {((deleteInfo?.incompleteTitles?.length ?? 0) - 12)} 件</div>
+                  )}
+                </div>
+              </div>
+            )}
+            <div className="mt-4 flex gap-2">
+              <button type="button" className="flex-1 bg-rose-600 text-white rounded-lg py-2" onClick={doDelete}>
+                削除する
+              </button>
+              <button type="button" className="px-4 rounded-lg border" onClick={() => setDeleteConfirmOpen(false)}>
+                キャンセル
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
+
 

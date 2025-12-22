@@ -180,6 +180,12 @@ export async function collabRoutes(app: FastifyInstance) {
           return
         }
 
+        // Heartbeat (keep connections alive through proxies)
+        if (msg?.type === 'ping') {
+          wsSend(ws, { type: 'pong', t: Number(msg.t ?? Date.now()) })
+          return
+        }
+
         if (msg?.type === 'presence') {
           const cur = st.peers.get(clientId)
           if (!cur) return
@@ -239,6 +245,7 @@ export async function collabRoutes(app: FastifyInstance) {
     })
   })
 }
+
 
 
 

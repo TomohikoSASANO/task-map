@@ -17,6 +17,9 @@ const AppInner: React.FC = () => {
     const [sidebarPinned, setSidebarPinned] = useState(false)
     const { collab } = useCollabContext()
     const mobileSheetTaskId = useAppStore((s) => s.mobileSheetTaskId)
+    const tasksCount = Object.keys(useAppStore((s) => s.tasks)).length
+    const [showOffline, setShowOffline] = useState(false)
+    const offlineTimerRef = React.useRef<number | null>(null)
 
     // Optional debug logging. Enable via: localStorage.setItem('taskmap-debug', '1')
     useEffect(() => {
@@ -24,6 +27,29 @@ const AppInner: React.FC = () => {
             console.log('[App] Collab state:', { connected: collab.connected, peers: collab.peers.length, rev: collab.rev })
         }
     }, [collab.connected, collab.peers.length, collab.rev])
+
+    // If offline persists, show a reload prompt (avoid silent "everything disappeared" UX).
+    useEffect(() => {
+        if (offlineTimerRef.current) {
+            window.clearTimeout(offlineTimerRef.current)
+            offlineTimerRef.current = null
+        }
+        if (collab.connected) {
+            setShowOffline(false)
+            return
+        }
+        // If we have no tasks and offline, show earlier.
+        const delay = tasksCount === 0 ? 2000 : 8000
+        offlineTimerRef.current = window.setTimeout(() => {
+            setShowOffline(true)
+        }, delay)
+        return () => {
+            if (offlineTimerRef.current) {
+                window.clearTimeout(offlineTimerRef.current)
+                offlineTimerRef.current = null
+            }
+        }
+    }, [collab.connected, tasksCount])
 
     // 初回起動時にサンプルタスクを1つ作成
     useEffect(() => {
@@ -54,7 +80,9 @@ const AppInner: React.FC = () => {
             <div className="p-3 border-b bg-white sticky z-10 flex items-center gap-3">
                 <h1 className="font-bold">Task Map</h1>
                 <div className="text-xs text-slate-500">
-                    {collab.connected ? `同期中（オンライン ${Math.max(1, collab.peers.length)}）` : 'オフライン（ローカルのみ）'}
+                    {collab.connected
+                        ? `同期中（オンライン ${Math.max(1, collab.peers.length)}）`
+                        : (collab.reconnecting ? '再接続中…' : 'オフライン（ローカルのみ）')}
                 </div>
                 {!isMobile && (
                 <div className="ml-auto text-xs text-slate-500">Delete: 選択エッジ削除 / Ctrl+Z: Undo / Ctrl+C/V: コピー貼付 / Shift+クリック: 複数選択</div>
@@ -79,6 +107,33 @@ const AppInner: React.FC = () => {
                             isOpen={!!mobileSheetTaskId}
                             onClose={() => useAppStore.getState().setMobileSheetTaskId(null)}
                         />
+                    )}
+                    {showOffline && (
+                        <div className="fixed inset-0 z-[80]">
+                            <div className="absolute inset-0 bg-black/40" />
+                            <div className="absolute left-4 right-4 top-24 bg-white rounded-2xl shadow-xl border p-4">
+                                <div className="font-semibold text-base">接続が不安定です</div>
+                                <div className="mt-2 text-sm text-slate-600">
+                                    サーバーとの接続が切れました。再接続を試みていますが、改善しない場合は再読み込みしてください。
+                                </div>
+                                <div className="mt-4 flex gap-2">
+                                    <button
+                                        type="button"
+                                        className="flex-1 bg-slate-900 text-white rounded-lg py-2"
+                                        onClick={() => window.location.reload()}
+                                    >
+                                        再読み込み
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="px-4 rounded-lg border"
+                                        onClick={() => setShowOffline(false)}
+                                    >
+                                        閉じる
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                     )}
                 </div>
                 {isMobile ? (

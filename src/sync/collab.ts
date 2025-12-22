@@ -14,6 +14,8 @@ export type PeerPresence = {
 
 type CollabState = {
   connected: boolean
+  reconnecting: boolean
+  offlineSince: number | null
   rev: number
   peers: PeerPresence[]
   me: { clientId: string; name: string; color: string }
@@ -104,9 +106,14 @@ export function useCollabContext(): CollabApi {
 export function useCollab() {
   const mapKey = useMemo(() => getMapKey(), [])
   const me = useMemo(() => getMe(), [])
-  const [state, setState] = useState<CollabState>({ connected: false, rev: 0, peers: [], me })
+  const [state, setState] = useState<CollabState>({ connected: false, reconnecting: false, offlineSince: null, rev: 0, peers: [], me })
 
   const wsRef = useRef<WebSocket | null>(null)
+  const unmountedRef = useRef(false)
+  const reconnectAttemptRef = useRef(0)
+  const reconnectTimerRef = useRef<number | null>(null)
+  const heartbeatTimerRef = useRef<number | null>(null)
+  const lastPongAtRef = useRef<number>(Date.now())
   const ignoreNextRef = useRef(false)
   const lastSentGraphRef = useRef<string>('')
   const revRef = useRef(0)
@@ -170,85 +177,174 @@ export function useCollab() {
       color: me.color,
     }).toString()
     const wsUrl = `${wsBase()}/ws/${encodeURIComponent(mapKey)}?${qs}`
-    dlog('[Collab] Connecting to WebSocket:', wsUrl)
-    const ws = new WebSocket(wsUrl)
-    wsRef.current = ws
+    unmountedRef.current = false
 
-    ws.onopen = () => {
-      dlog('[Collab] WebSocket connected')
-      setState((s) => ({ ...s, connected: true }))
-    }
-    ws.onclose = (ev) => {
-      dlog('[Collab] WebSocket closed', ev.code, ev.reason)
-      setState((s) => ({ ...s, connected: false }))
-    }
-    ws.onerror = (ev) => {
-      derr('[Collab] WebSocket error', ev)
-      setState((s) => ({ ...s, connected: false }))
+    const clearTimers = () => {
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current)
+        reconnectTimerRef.current = null
+      }
+      if (heartbeatTimerRef.current) {
+        clearInterval(heartbeatTimerRef.current)
+        heartbeatTimerRef.current = null
+      }
     }
 
-    ws.onmessage = (ev) => {
-      let msg: any
+    const scheduleReconnect = (reason: string) => {
+      if (unmountedRef.current) return
+      const attempt = Math.min(12, reconnectAttemptRef.current + 1)
+      reconnectAttemptRef.current = attempt
+      const base = 800 // ms
+      const max = 15000 // ms
+      const delay = Math.min(max, Math.round(base * Math.pow(1.6, attempt - 1)))
+      dlog('[Collab] scheduleReconnect', { attempt, delay, reason })
+      setState((s) => ({ ...s, connected: false, reconnecting: true, offlineSince: s.offlineSince ?? Date.now() }))
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current)
+      reconnectTimerRef.current = window.setTimeout(() => {
+        connect('timer')
+      }, delay)
+    }
+
+    const connect = (trigger: string) => {
+      if (unmountedRef.current) return
+
+      clearTimers()
       try {
-        msg = JSON.parse(ev.data)
-      } catch {
-        return
-      }
-      if (msg?.type === 'init') {
-        dlog('[Collab] Received init message', { rev: msg.rev, peersCount: msg.peers?.length, tasksCount: Object.keys(msg.graph?.tasks || {}).length })
-        hasInitRef.current = true
-        if (msg.graph) {
-          const remote = msg.graph as Graph
-          const local = useAppStore.getState()
-          const localCount = Object.keys(local.tasks || {}).length
-          const remoteCount = Object.keys(remote.tasks || {}).length
-          serverEmptyAtInitRef.current = remoteCount === 0
-          // If server is empty but local has data (first time), bootstrap local -> server once.
-          if (remoteCount === 0 && localCount > 0) {
-            revRef.current = Number(msg.rev ?? revRef.current)
-            setState((s) => ({ ...s, rev: Number(msg.rev ?? s.rev) }))
-            maybeBootstrapLocalToServer()
-          } else {
-            ignoreNextRef.current = true
-            useAppStore.getState().setGraph(remote)
+        wsRef.current?.close?.()
+      } catch {}
+      wsRef.current = null
+
+      lastPongAtRef.current = Date.now()
+      hasInitRef.current = false
+
+      dlog('[Collab] Connecting to WebSocket:', { wsUrl, trigger })
+      const ws = new WebSocket(wsUrl)
+      wsRef.current = ws
+
+      ws.onopen = () => {
+        dlog('[Collab] WebSocket connected')
+        reconnectAttemptRef.current = 0
+        lastPongAtRef.current = Date.now()
+        setState((s) => ({ ...s, connected: true, reconnecting: false, offlineSince: null }))
+
+        // Heartbeat (keepalive + detect half-open connections)
+        heartbeatTimerRef.current = window.setInterval(() => {
+          const w = wsRef.current
+          if (!w || w.readyState !== WebSocket.OPEN) return
+          try {
+            w.send(JSON.stringify({ type: 'ping', t: Date.now() }))
+          } catch {}
+
+          // If we haven't received pong for a while, force reconnect.
+          if (Date.now() - lastPongAtRef.current > 70000) {
+            try {
+              w.close()
+            } catch {}
           }
+        }, 25000)
+      }
+
+      ws.onclose = (ev) => {
+        dlog('[Collab] WebSocket closed', ev.code, ev.reason)
+        clearTimers()
+        setState((s) => ({ ...s, connected: false, reconnecting: true, offlineSince: s.offlineSince ?? Date.now() }))
+        scheduleReconnect('close')
+      }
+
+      ws.onerror = (ev) => {
+        derr('[Collab] WebSocket error', ev)
+        // close -> reconnect (some browsers don't reliably fire close after error)
+        try {
+          ws.close()
+        } catch {}
+      }
+
+      ws.onmessage = (ev) => {
+        let msg: any
+        try {
+          msg = JSON.parse(ev.data)
+        } catch {
+          return
         }
-        if (Array.isArray(msg.peers)) {
-          setState((s) => ({ ...s, peers: msg.peers as PeerPresence[], rev: Number(msg.rev ?? s.rev) }))
-          revRef.current = Number(msg.rev ?? revRef.current)
+
+        if (msg?.type === 'pong') {
+          lastPongAtRef.current = Date.now()
+          return
         }
-        return
-      }
-      if (msg?.type === 'peer:join') {
-        const p = msg.peer as PeerPresence
-        setState((s) => ({ ...s, peers: [...s.peers.filter((x) => x.clientId !== p.clientId), p] }))
-        return
-      }
-      if (msg?.type === 'peer:leave') {
-        const cid = msg.clientId as string
-        setState((s) => ({ ...s, peers: s.peers.filter((x) => x.clientId !== cid) }))
-        return
-      }
-      if (msg?.type === 'presence') {
-        const p = msg.peer as PeerPresence
-        setState((s) => ({ ...s, peers: [...s.peers.filter((x) => x.clientId !== p.clientId), p] }))
-        return
-      }
-      if (msg?.type === 'state') {
-        if (msg.graph) {
-          dlog('[Collab] Received state update', { rev: msg.rev, from: msg.from, tasksCount: Object.keys(msg.graph.tasks || {}).length })
-          ignoreNextRef.current = true
-          useAppStore.getState().setGraph(msg.graph as Graph)
-          revRef.current = Number(msg.rev ?? revRef.current)
-          setState((s) => ({ ...s, rev: revRef.current }))
+
+        if (msg?.type === 'init') {
+          dlog('[Collab] Received init message', { rev: msg.rev, peersCount: msg.peers?.length, tasksCount: Object.keys(msg.graph?.tasks || {}).length })
+          hasInitRef.current = true
+          if (msg.graph) {
+            const remote = msg.graph as Graph
+            const local = useAppStore.getState()
+            const localCount = Object.keys(local.tasks || {}).length
+            const remoteCount = Object.keys(remote.tasks || {}).length
+            serverEmptyAtInitRef.current = remoteCount === 0
+            // If server is empty but local has data (first time), bootstrap local -> server once.
+            if (remoteCount === 0 && localCount > 0) {
+              revRef.current = Number(msg.rev ?? revRef.current)
+              setState((s) => ({ ...s, rev: Number(msg.rev ?? s.rev) }))
+              maybeBootstrapLocalToServer()
+            } else {
+              ignoreNextRef.current = true
+              useAppStore.getState().setGraph(remote)
+            }
+          }
+          if (Array.isArray(msg.peers)) {
+            setState((s) => ({ ...s, peers: msg.peers as PeerPresence[], rev: Number(msg.rev ?? s.rev) }))
+            revRef.current = Number(msg.rev ?? revRef.current)
+          }
+          return
         }
-        return
+        if (msg?.type === 'peer:join') {
+          const p = msg.peer as PeerPresence
+          setState((s) => ({ ...s, peers: [...s.peers.filter((x) => x.clientId !== p.clientId), p] }))
+          return
+        }
+        if (msg?.type === 'peer:leave') {
+          const cid = msg.clientId as string
+          setState((s) => ({ ...s, peers: s.peers.filter((x) => x.clientId !== cid) }))
+          return
+        }
+        if (msg?.type === 'presence') {
+          const p = msg.peer as PeerPresence
+          setState((s) => ({ ...s, peers: [...s.peers.filter((x) => x.clientId !== p.clientId), p] }))
+          return
+        }
+        if (msg?.type === 'state') {
+          if (msg.graph) {
+            dlog('[Collab] Received state update', { rev: msg.rev, from: msg.from, tasksCount: Object.keys(msg.graph.tasks || {}).length })
+            ignoreNextRef.current = true
+            useAppStore.getState().setGraph(msg.graph as Graph)
+            revRef.current = Number(msg.rev ?? revRef.current)
+            setState((s) => ({ ...s, rev: revRef.current }))
+          }
+          return
+        }
       }
     }
+
+    // initial connect
+    connect('effect')
+
+    const onOnline = () => scheduleReconnect('online')
+    const onVis = () => {
+      if (!document.hidden) {
+        const w = wsRef.current
+        if (!w || w.readyState === WebSocket.CLOSED) scheduleReconnect('visibility')
+      }
+    }
+    window.addEventListener('online', onOnline)
+    document.addEventListener('visibilitychange', onVis)
 
     return () => {
+      unmountedRef.current = true
+      clearTimers()
+      window.removeEventListener('online', onOnline)
+      document.removeEventListener('visibilitychange', onVis)
       try {
-        ws.close()
+        wsRef.current?.close?.()
       } catch {}
       wsRef.current = null
     }
@@ -303,6 +399,7 @@ export function useCollab() {
 
   return { collab: state, sendPresence }
 }
+
 
 
 
