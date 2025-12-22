@@ -118,9 +118,12 @@ export const TaskNode: React.FC<Props> = ({ id, data, skipHandles = false }) => 
                     (isDone ? 'ring-1 ring-emerald-300 ' : '') +
                     (isHighlight ? 'outline outline-2 outline-sky-400 ' : '') +
                     (isMobile && holdUi === 'pressing' ? 'ring-2 ring-slate-300 ' : '') +
-                    (isHoldActive ? 'ring-2 ring-sky-500 shadow-md ' : '')
+                    (isHoldActive ? 'ring-2 ring-sky-500 shadow-md ' : '') +
+                    // Prevent long-press text selection / "search" callout on mobile browsers
+                    (isMobile ? 'select-none ' : '')
                 )
             })()}
+            style={isMobile ? ({ WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none' } as any) : undefined}
             onDragOver={(e) => {
                 if (Array.from(e.dataTransfer.types).includes('application/x-user-id')) {
                     e.preventDefault()
@@ -294,11 +297,22 @@ export const TaskNode: React.FC<Props> = ({ id, data, skipHandles = false }) => 
             {isMobile && (
                 <div
                     className="absolute inset-0 z-10 nodrag nopan"
-                    style={{ background: 'transparent', touchAction: 'manipulation' }}
+                    style={{
+                        background: 'transparent',
+                        touchAction: 'manipulation',
+                        WebkitTouchCallout: 'none',
+                        WebkitUserSelect: 'none',
+                        userSelect: 'none',
+                    }}
                     aria-label="タスク編集"
                     onPointerDown={(e) => {
                         // 長押し: その間だけ移動（指を離したら戻る）
                         e.stopPropagation()
+                        // Prevent browser long-press selection/search UI
+                        e.preventDefault()
+                        try {
+                            ;(e.currentTarget as any).setPointerCapture?.(e.pointerId)
+                        } catch {}
                         holdActivatedRef.current = false
                         startPosRef.current = { x: e.clientX, y: e.clientY }
                         setHoldUi('pressing')
@@ -325,6 +339,9 @@ export const TaskNode: React.FC<Props> = ({ id, data, skipHandles = false }) => 
                     }}
                     onPointerUp={(e) => {
                         e.stopPropagation()
+                        try {
+                            ;(e.currentTarget as any).releasePointerCapture?.(e.pointerId)
+                        } catch {}
                         if (holdTimerRef.current) window.clearTimeout(holdTimerRef.current)
                         holdTimerRef.current = null
 
@@ -348,7 +365,7 @@ export const TaskNode: React.FC<Props> = ({ id, data, skipHandles = false }) => 
                         if (mobileHoldDragId === id) setMobileHoldDragId(null)
                         setHoldUi('idle')
                     }}
-                    onContextMenu={(e) => e.preventDefault()}
+                    onContextMenu={(e) => { e.preventDefault(); e.stopPropagation() }}
                 />
             )}
         </motion.div>
