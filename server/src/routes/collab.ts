@@ -33,6 +33,15 @@ function uniqStrings(xs: string[]): string[] {
   return Array.from(new Set(xs.filter((x) => typeof x === 'string' && x.length > 0)))
 }
 
+function isPlainObject(v: any): v is Record<string, any> {
+  return !!v && typeof v === 'object' && !Array.isArray(v)
+}
+
+function finiteNumber(v: any, fallback = 0): number {
+  const n = typeof v === 'number' ? v : Number(v)
+  return Number.isFinite(n) ? n : fallback
+}
+
 function normalizeGraph(g: Graph): Graph {
   const tasks = (g?.tasks && typeof g.tasks === 'object') ? g.tasks : {}
   const users = (g?.users && typeof g.users === 'object') ? g.users : {}
@@ -41,6 +50,61 @@ function normalizeGraph(g: Graph): Graph {
   // Keep only roots that exist.
   merged.rootTaskIds = merged.rootTaskIds.filter((id) => Object.prototype.hasOwnProperty.call(tasks, id))
   return merged
+}
+
+// Normalize to avoid "canvas disappears" states:
+// - Ensure every task has finite {position.x, position.y}
+// - Rebuild children arrays from parentId (single source of truth)
+// - If a task references a missing parent, treat it as a root (parentId=null)
+// - Ensure rootTaskIds is consistent (and includes all parentId=null tasks)
+function sanitizeGraph(g: Graph): Graph {
+  const n = normalizeGraph(g)
+  const rawTasks = isPlainObject(n.tasks) ? n.tasks : {}
+  const tasks: Record<string, any> = {}
+
+  // First pass: copy + coerce fields we rely on.
+  for (const id of Object.keys(rawTasks)) {
+    const t = rawTasks[id]
+    if (!isPlainObject(t)) continue
+    const parentIdRaw = t.parentId
+    const parentId = typeof parentIdRaw === 'string' && parentIdRaw.length > 0 ? parentIdRaw : null
+    const position = isPlainObject(t.position)
+      ? { x: finiteNumber(t.position.x, 0), y: finiteNumber(t.position.y, 0) }
+      : { x: 0, y: 0 }
+    tasks[id] = {
+      ...t,
+      id: typeof t.id === 'string' && t.id.length > 0 ? t.id : id,
+      title: typeof t.title === 'string' ? t.title : '',
+      parentId,
+      // children is rebuilt below
+      children: [],
+      dependsOn: Array.isArray(t.dependsOn) ? uniqStrings(t.dependsOn) : [],
+      expanded: !!t.expanded,
+      position,
+    }
+  }
+
+  // Second pass: fix missing parent -> root, rebuild children.
+  for (const id of Object.keys(tasks)) {
+    const t = tasks[id]
+    const pid = t.parentId as string | null
+    if (pid && !tasks[pid]) {
+      t.parentId = null
+    }
+  }
+  for (const id of Object.keys(tasks)) {
+    const t = tasks[id]
+    const pid = t.parentId as string | null
+    if (pid && tasks[pid]) {
+      tasks[pid].children.push(id)
+    }
+  }
+
+  const incomingRoots = Array.isArray(n.rootTaskIds) ? uniqStrings(n.rootTaskIds) : []
+  const derivedRoots = Object.keys(tasks).filter((id) => !tasks[id]?.parentId)
+  const rootTaskIds = uniqStrings([...incomingRoots, ...derivedRoots]).filter((id) => Object.prototype.hasOwnProperty.call(tasks, id))
+
+  return { users: isPlainObject(n.users) ? n.users : {}, tasks, rootTaskIds }
 }
 
 // Merge policy to prevent catastrophic "wipe":
@@ -55,7 +119,7 @@ function mergeGraph(prev: Graph, incoming: Graph): Graph {
   const rootTaskIds = uniqStrings([...(p.rootTaskIds || []), ...(n.rootTaskIds || [])]).filter((id) =>
     Object.prototype.hasOwnProperty.call(tasks, id),
   )
-  return { tasks, users, rootTaskIds }
+  return sanitizeGraph({ tasks, users, rootTaskIds })
 }
 
 async function ensureSystemMap(mapKey: string): Promise<{ mapId: string }> {
