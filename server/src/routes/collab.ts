@@ -74,8 +74,6 @@ function sanitizeGraph(g: Graph): Graph {
     if (!isPlainObject(t)) continue
     const parentIdRaw = t.parentId
     const parentId = typeof parentIdRaw === 'string' && parentIdRaw.length > 0 ? parentIdRaw : null
-    const expandedRaw = (t as any).expanded
-    const expanded = typeof expandedRaw === 'boolean' ? expandedRaw : undefined
     const position = isPlainObject(t.position)
       ? {
           x: clamp(finiteNumber(t.position.x, 0), -POS_LIMIT, POS_LIMIT),
@@ -90,8 +88,8 @@ function sanitizeGraph(g: Graph): Graph {
       // children is rebuilt below
       children: [],
       dependsOn: Array.isArray(t.dependsOn) ? uniqStrings(t.dependsOn) : [],
-      // NOTE: if older clients omit `expanded`, default later based on children.
-      expanded,
+      // `expanded` is UI-only; ignore incoming to avoid hiding nodes across clients.
+      expanded: undefined,
       position,
     }
   }
@@ -113,12 +111,10 @@ function sanitizeGraph(g: Graph): Graph {
   }
 
   // Third pass: default expanded safely.
-  // If `expanded` is missing (older clients), keep parents expanded so children don't "disappear".
+  // Always keep parents expanded so children don't "disappear" across clients.
   for (const id of Object.keys(tasks)) {
     const t = tasks[id]
-    if (typeof t.expanded !== 'boolean') {
-      t.expanded = Array.isArray(t.children) && t.children.length > 0
-    }
+    if (Array.isArray(t.children) && t.children.length > 0) t.expanded = true
   }
 
   const incomingRoots = Array.isArray(n.rootTaskIds) ? uniqStrings(n.rootTaskIds) : []
