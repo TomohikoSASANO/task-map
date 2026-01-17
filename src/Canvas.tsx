@@ -47,6 +47,8 @@ export const Canvas: React.FC = () => {
     const containerRef = useRef<HTMLDivElement | null>(null)
     const presencePeers = collab.peers
     const holdDragRef = useRef<{ id: string; dx: number; dy: number } | null>(null)
+    const lastAutoFitAtRef = useRef<number>(0)
+    const prevConnectedRef = useRef<boolean>(false)
 
 
     const snapshotGraph = () => {
@@ -63,6 +65,24 @@ export const Canvas: React.FC = () => {
             rf.setCenter((n.position?.x ?? 0) + (n.width ?? 0) / 2, (n.position?.y ?? 0) + (n.height ?? 0) / 2, { zoom: currentZoom, duration: 300 })
         } catch { }
     }, [focusTaskId])
+
+    // When collaboration reconnects, auto-fit once to avoid "everything disappeared" due to off-screen viewport.
+    useEffect(() => {
+        const was = prevConnectedRef.current
+        const now = !!collab.connected
+        prevConnectedRef.current = now
+        if (!was && now) {
+            const tcount = Object.keys(graph.tasks || {}).length
+            if (tcount === 0) return
+            const nowTs = Date.now()
+            if (nowTs - lastAutoFitAtRef.current < 5000) return
+            lastAutoFitAtRef.current = nowTs
+            // give ReactFlow a tick to apply the latest nodes
+            window.setTimeout(() => {
+                try { rf.fitView({ padding: 0.2, duration: 250 } as any) } catch { }
+            }, 80)
+        }
+    }, [collab.connected])
 
     const isVisible = (id: string): boolean => {
         let cur = graph.tasks[id]

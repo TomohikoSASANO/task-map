@@ -42,6 +42,10 @@ function finiteNumber(v: any, fallback = 0): number {
   return Number.isFinite(n) ? n : fallback
 }
 
+function clamp(n: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, n))
+}
+
 function normalizeGraph(g: Graph): Graph {
   const tasks = (g?.tasks && typeof g.tasks === 'object') ? g.tasks : {}
   const users = (g?.users && typeof g.users === 'object') ? g.users : {}
@@ -61,6 +65,8 @@ function sanitizeGraph(g: Graph): Graph {
   const n = normalizeGraph(g)
   const rawTasks = isPlainObject(n.tasks) ? n.tasks : {}
   const tasks: Record<string, any> = {}
+  // Avoid extreme coordinates that can make ReactFlow appear blank due to precision/viewport issues.
+  const POS_LIMIT = 100000
 
   // First pass: copy + coerce fields we rely on.
   for (const id of Object.keys(rawTasks)) {
@@ -69,7 +75,10 @@ function sanitizeGraph(g: Graph): Graph {
     const parentIdRaw = t.parentId
     const parentId = typeof parentIdRaw === 'string' && parentIdRaw.length > 0 ? parentIdRaw : null
     const position = isPlainObject(t.position)
-      ? { x: finiteNumber(t.position.x, 0), y: finiteNumber(t.position.y, 0) }
+      ? {
+          x: clamp(finiteNumber(t.position.x, 0), -POS_LIMIT, POS_LIMIT),
+          y: clamp(finiteNumber(t.position.y, 0), -POS_LIMIT, POS_LIMIT),
+        }
       : { x: 0, y: 0 }
     tasks[id] = {
       ...t,
