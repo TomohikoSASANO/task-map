@@ -68,7 +68,8 @@ export const Canvas: React.FC = () => {
         let cur = graph.tasks[id]
         while (cur && cur.parentId) {
             const p = graph.tasks[cur.parentId]
-            if (!p) return false
+            // If parent is missing (data inconsistency), keep it visible rather than hiding everything.
+            if (!p) return true
             if (!p.expanded) return false
             cur = p
         }

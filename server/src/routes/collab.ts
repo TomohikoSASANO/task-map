@@ -199,10 +199,13 @@ export async function collabRoutes(app: FastifyInstance) {
       const latest = await loadLatestSnapshot(mapId)
       if (latest) {
         st.rev = latest.rev
-        st.graph = latest.graph
+      // Snapshot graphs may contain broken parent/children/position fields from past bugs.
+      // Sanitize on load so new clients don't receive a graph that makes the canvas invisible.
+      st.graph = sanitizeGraph(latest.graph)
       }
     }
-    return reply.send({ ok: true, rev: st.rev, graph: st.graph })
+  // Always serve a sanitized graph to clients.
+  return reply.send({ ok: true, rev: st.rev, graph: sanitizeGraph(st.graph) })
   })
 
   // WS: realtime collaboration
@@ -245,7 +248,7 @@ export async function collabRoutes(app: FastifyInstance) {
         const latest = await loadLatestSnapshot(mapId)
         if (latest) {
           st.rev = latest.rev
-          st.graph = latest.graph
+          st.graph = sanitizeGraph(latest.graph)
         }
       }
 
@@ -260,7 +263,7 @@ export async function collabRoutes(app: FastifyInstance) {
       wsSend(ws, {
         type: 'init',
         rev: st.rev,
-        graph: st.graph,
+        graph: sanitizeGraph(st.graph),
         peers: Array.from(st.peers.values()),
       })
       broadcast(mapKey, { type: 'peer:join', peer: st.peers.get(clientId) }, clientId)
