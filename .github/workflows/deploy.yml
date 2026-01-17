@@ -192,10 +192,16 @@ jobs:
             docker exec "$CONTAINER" sh -c "openssl x509 -in /etc/letsencrypt/live/$DOMAIN/fullchain.pem -noout -subject -issuer -startdate -enddate || true"
 
             log "Step 6: Test Nginx configuration"
-            docker exec "$CONTAINER" nginx -t
-
-            log "Step 7: Reload Nginx"
-            docker exec "$CONTAINER" nginx -s reload
+            # NOTE:
+            # This container serves multiple vhosts. If an unrelated vhost config is broken
+            # (e.g. missing upstream container), `nginx -t` fails and blocks TaskMap API deployment.
+            # In that case, keep the current running Nginx config and continue deploying the API.
+            if docker exec "$CONTAINER" nginx -t; then
+              log "Step 7: Reload Nginx"
+              docker exec "$CONTAINER" nginx -s reload
+            else
+              log "WARN: nginx -t failed; skipping reload but continuing with API deployment"
+            fi
 
             echo "Step 7.5: (non-fatal) Ensure taskmap DB/API are running"
             # NOTE: We keep the static deploy green even if API build/run fails.
