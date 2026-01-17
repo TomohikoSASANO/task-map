@@ -166,16 +166,29 @@ async function ensureSystemMap(mapKey: string): Promise<{ mapId: string }> {
 }
 
 async function loadLatestSnapshot(mapId: string): Promise<{ rev: number; graph: Graph } | null> {
-  const snap = await prisma.snapshot.findFirst({
+  // Some maps may have an accidental "empty" snapshot at the head (legacy bug).
+  // Prefer the newest snapshot that actually contains tasks; if none exist, fall back to newest.
+  const snaps = await prisma.snapshot.findMany({
     where: { mapId },
     orderBy: { createdAt: 'desc' },
+    take: 25,
   })
-  if (!snap) return null
-  const data = snap.data as any
-  const rev = typeof data?.rev === 'number' ? data.rev : 0
-  const graph = (data?.graph ?? data) as Graph
-  if (!graph?.tasks || !graph?.users || !Array.isArray(graph?.rootTaskIds)) return null
-  return { rev, graph }
+  if (!snaps.length) return null
+
+  const parse = (snap: any): { rev: number; graph: Graph } | null => {
+    const data = snap?.data as any
+    const rev = typeof data?.rev === 'number' ? data.rev : 0
+    const graph = (data?.graph ?? data) as Graph
+    if (!graph?.tasks || !graph?.users || !Array.isArray(graph?.rootTaskIds)) return null
+    return { rev, graph }
+  }
+
+  const parsedAll = snaps.map(parse).filter(Boolean) as Array<{ rev: number; graph: Graph }>
+  if (!parsedAll.length) return null
+
+  const nonEmpty = parsedAll.find((p) => Object.keys(p.graph?.tasks || {}).length > 0)
+  const fallback = parsedAll[0]!
+  return nonEmpty ?? fallback
 }
 
 function getOrInitMapState(mapKey: string): ServerMapState {

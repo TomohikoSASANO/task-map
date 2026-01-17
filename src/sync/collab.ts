@@ -72,6 +72,12 @@ function derr(...args: any[]) {
   if (isDebug()) console.error(...args)
 }
 
+function rememberAnomaly(kind: string, info: any) {
+  try {
+    localStorage.setItem('taskmap-last-sync-anomaly', JSON.stringify({ at: Date.now(), kind, info }))
+  } catch {}
+}
+
 // UI-only fields must not be synced across clients.
 function stripUiFieldsFromGraph(g: Graph): Graph {
   const tasks: Record<string, any> = {}
@@ -149,6 +155,7 @@ export function useCollab() {
           const remoteCount = Object.keys(remote.tasks || {}).length
           // If server is empty but local has data (first time), don't wipe local.
           if (remoteCount === 0 && localCount > 0) {
+            rememberAnomaly('api_empty_graph', { localCount, rev: data.rev })
             revRef.current = Number(data.rev ?? 0)
             setState((s) => ({ ...s, rev: revRef.current }))
             return
@@ -295,6 +302,7 @@ export function useCollab() {
             serverEmptyAtInitRef.current = remoteCount === 0
             // If server is empty but local has data (first time), bootstrap local -> server once.
             if (remoteCount === 0 && localCount > 0) {
+              rememberAnomaly('ws_init_empty_graph', { localCount, rev: msg.rev })
               revRef.current = Number(msg.rev ?? revRef.current)
               setState((s) => ({ ...s, rev: Number(msg.rev ?? s.rev) }))
               maybeBootstrapLocalToServer()
@@ -332,6 +340,14 @@ export function useCollab() {
             // If this is our own update echoed back as an ack, don't re-apply the same graph.
             // We only need the authoritative `rev` from the server.
             if (msg.from === me.clientId) return
+
+            // Never apply a total wipe if we already have tasks. (Still allow normal deletes.)
+            const remoteCount = Object.keys((msg.graph as any)?.tasks || {}).length
+            const localCount = Object.keys(useAppStore.getState().tasks || {}).length
+            if (remoteCount === 0 && localCount > 0) {
+              rememberAnomaly('ws_state_empty_graph', { localCount, rev: msg.rev, from: msg.from })
+              return
+            }
 
             ignoreNextRef.current = true
             useAppStore.getState().setGraph(msg.graph as Graph)
