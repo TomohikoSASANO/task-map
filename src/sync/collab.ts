@@ -72,6 +72,30 @@ function derr(...args: any[]) {
   if (isDebug()) console.error(...args)
 }
 
+// `expanded` is a view/UI preference. Do not sync it across clients.
+function stripUiFieldsFromGraph(g: Graph): Graph {
+  const tasks: Record<string, any> = {}
+  for (const [id, t] of Object.entries(g.tasks || {})) {
+    if (!t || typeof t !== 'object') continue
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { expanded, ...rest } = t as any
+    tasks[id] = rest
+  }
+  return { users: g.users || {}, tasks, rootTaskIds: Array.isArray(g.rootTaskIds) ? g.rootTaskIds : [] }
+}
+
+function mergeRemoteGraphPreservingLocalUi(remote: Graph): Graph {
+  const local = useAppStore.getState()
+  const tasks: Record<string, any> = { ...(remote.tasks || {}) }
+  for (const [id, rt] of Object.entries(tasks)) {
+    const lt = (local.tasks as any)?.[id]
+    if (lt && typeof lt.expanded === 'boolean') {
+      tasks[id] = { ...(rt as any), expanded: lt.expanded }
+    }
+  }
+  return { users: remote.users || {}, tasks, rootTaskIds: Array.isArray(remote.rootTaskIds) ? remote.rootTaskIds : [] }
+}
+
 function wsBase(): string {
   const base = apiBase()
   if (base) {
@@ -142,7 +166,7 @@ export function useCollab() {
             return
           }
           ignoreNextRef.current = true
-          useAppStore.getState().setGraph(remote)
+          useAppStore.getState().setGraph(mergeRemoteGraphPreservingLocalUi(remote))
           revRef.current = Number(data.rev ?? 0)
           setState((s) => ({ ...s, rev: revRef.current }))
         }
@@ -288,7 +312,7 @@ export function useCollab() {
               maybeBootstrapLocalToServer()
             } else {
               ignoreNextRef.current = true
-              useAppStore.getState().setGraph(remote)
+              useAppStore.getState().setGraph(mergeRemoteGraphPreservingLocalUi(remote))
             }
           }
           if (Array.isArray(msg.peers)) {
@@ -322,7 +346,7 @@ export function useCollab() {
             if (msg.from === me.clientId) return
 
             ignoreNextRef.current = true
-            useAppStore.getState().setGraph(msg.graph as Graph)
+            useAppStore.getState().setGraph(mergeRemoteGraphPreservingLocalUi(msg.graph as Graph))
           }
           return
         }
@@ -378,15 +402,16 @@ export function useCollab() {
       }
 
       const graph: Graph = { tasks: s.tasks as any, users: s.users as any, rootTaskIds: s.rootTaskIds as any }
-      const serialized = JSON.stringify(graph)
+      const outgoing = stripUiFieldsFromGraph(graph)
+      const serialized = JSON.stringify(outgoing)
       if (serialized === last) return
       last = serialized
       lastSentGraphRef.current = serialized
       ;(window as any).__taskmapSendTimer && clearTimeout((window as any).__taskmapSendTimer)
       ;(window as any).__taskmapSendTimer = setTimeout(() => {
         try {
-          dlog('[Collab] Sending state update', { rev: revRef.current, tasksCount: Object.keys(graph.tasks || {}).length })
-          ws.send(JSON.stringify({ type: 'state', rev: revRef.current, graph }))
+          dlog('[Collab] Sending state update', { rev: revRef.current, tasksCount: Object.keys(outgoing.tasks || {}).length })
+          ws.send(JSON.stringify({ type: 'state', rev: revRef.current, graph: outgoing }))
         } catch (err) {
           derr('[Collab] Failed to send state', err)
         }
