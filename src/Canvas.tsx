@@ -90,7 +90,8 @@ export const Canvas: React.FC = () => {
             const p = graph.tasks[cur.parentId]
             // If parent is missing (data inconsistency), keep it visible rather than hiding everything.
             if (!p) return true
-            if (!p.expanded) return false
+            // Only collapse when explicitly false (older graphs may omit `expanded`)
+            if (p.expanded === false) return false
             cur = p
         }
         return true

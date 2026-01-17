@@ -74,6 +74,8 @@ function sanitizeGraph(g: Graph): Graph {
     if (!isPlainObject(t)) continue
     const parentIdRaw = t.parentId
     const parentId = typeof parentIdRaw === 'string' && parentIdRaw.length > 0 ? parentIdRaw : null
+    const expandedRaw = (t as any).expanded
+    const expanded = typeof expandedRaw === 'boolean' ? expandedRaw : undefined
     const position = isPlainObject(t.position)
       ? {
           x: clamp(finiteNumber(t.position.x, 0), -POS_LIMIT, POS_LIMIT),
@@ -88,7 +90,8 @@ function sanitizeGraph(g: Graph): Graph {
       // children is rebuilt below
       children: [],
       dependsOn: Array.isArray(t.dependsOn) ? uniqStrings(t.dependsOn) : [],
-      expanded: !!t.expanded,
+      // NOTE: if older clients omit `expanded`, default later based on children.
+      expanded,
       position,
     }
   }
@@ -106,6 +109,15 @@ function sanitizeGraph(g: Graph): Graph {
     const pid = t.parentId as string | null
     if (pid && tasks[pid]) {
       tasks[pid].children.push(id)
+    }
+  }
+
+  // Third pass: default expanded safely.
+  // If `expanded` is missing (older clients), keep parents expanded so children don't "disappear".
+  for (const id of Object.keys(tasks)) {
+    const t = tasks[id]
+    if (typeof t.expanded !== 'boolean') {
+      t.expanded = Array.isArray(t.children) && t.children.length > 0
     }
   }
 
