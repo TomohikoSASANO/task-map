@@ -49,6 +49,10 @@ export const Canvas: React.FC = () => {
     const holdDragRef = useRef<{ id: string; dx: number; dy: number } | null>(null)
     const lastAutoFitAtRef = useRef<number>(0)
     const prevConnectedRef = useRef<boolean>(false)
+    const [rfMountKey, setRfMountKey] = useState(0)
+    const nodesLenRef = useRef<number>(0)
+    const lastRecoverAtRef = useRef<number>(0)
+    const recoverCountRef = useRef<number>(0)
 
 
     const snapshotGraph = () => {
@@ -130,6 +134,48 @@ export const Canvas: React.FC = () => {
         }
         return arr
     }, [graph, dragVersion, candidateId])
+
+    useEffect(() => {
+        nodesLenRef.current = nodes.length
+    }, [nodes.length])
+
+    // Watchdog: sometimes ReactFlow DOM can become blank while store still has tasks.
+    // Auto-recover by remounting ReactFlow and recording diagnostics.
+    useEffect(() => {
+        const timer = window.setInterval(() => {
+            const totalTasks = Object.keys(graph.tasks || {}).length
+            if (totalTasks === 0) return
+            const expected = nodesLenRef.current
+            if (expected === 0) return
+            const el = containerRef.current
+            if (!el) return
+            const rect = el.getBoundingClientRect()
+            if (rect.width < 10 || rect.height < 10) return
+            const domNodes = el.querySelectorAll('.react-flow__node').length
+            if (domNodes > 0) return
+
+            const now = Date.now()
+            if (now - lastRecoverAtRef.current < 8000) return
+            if (recoverCountRef.current >= 5) return
+            lastRecoverAtRef.current = now
+            recoverCountRef.current += 1
+
+            const msg = `[RenderBlank] tasks=${totalTasks} nodesMemo=${expected} domNodes=${domNodes} connected=${collab.connected} rev=${collab.rev} recover=${recoverCountRef.current} rect=${Math.round(rect.width)}x${Math.round(rect.height)}`
+            const e = { at: now, message: msg, stack: new Error('RenderBlank').stack }
+            try {
+                localStorage.setItem('taskmap-last-error', JSON.stringify(e))
+            } catch { }
+            try {
+                window.dispatchEvent(new CustomEvent('taskmap:error', { detail: e }))
+            } catch { }
+
+            setRfMountKey((k) => k + 1)
+            window.setTimeout(() => {
+                try { rf.fitView({ padding: 0.2, duration: 250 } as any) } catch { }
+            }, 200)
+        }, 2000)
+        return () => window.clearInterval(timer)
+    }, [graph.tasks, collab.connected, collab.rev])
     const edges: Edge[] = useMemo(() => {
         const arr: Edge[] = []
         Object.values(graph.tasks).forEach((t) => {
@@ -528,6 +574,7 @@ export const Canvas: React.FC = () => {
                 </div>
             )}
             <ReactFlow
+                key={rfMountKey}
                 nodes={nodes}
                 edges={edges}
                 nodeTypes={nodeTypes}

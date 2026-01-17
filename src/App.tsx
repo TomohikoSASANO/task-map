@@ -70,9 +70,17 @@ const AppInner: React.FC = () => {
         }
         window.addEventListener('error', onError)
         window.addEventListener('unhandledrejection', onRej)
+        const onCustom = (ev: any) => {
+            const d = ev?.detail
+            if (d && typeof d.message === 'string') {
+                save(d as CapturedError)
+            }
+        }
+        window.addEventListener('taskmap:error', onCustom)
         return () => {
             window.removeEventListener('error', onError)
             window.removeEventListener('unhandledrejection', onRej)
+            window.removeEventListener('taskmap:error', onCustom)
         }
     }, [])
 
