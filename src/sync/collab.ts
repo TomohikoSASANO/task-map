@@ -72,7 +72,7 @@ function derr(...args: any[]) {
   if (isDebug()) console.error(...args)
 }
 
-// `expanded` is a view/UI preference. Do not sync it across clients.
+// UI-only fields must not be synced across clients.
 function stripUiFieldsFromGraph(g: Graph): Graph {
   const tasks: Record<string, any> = {}
   for (const [id, t] of Object.entries(g.tasks || {})) {
@@ -82,18 +82,6 @@ function stripUiFieldsFromGraph(g: Graph): Graph {
     tasks[id] = rest
   }
   return { users: g.users || {}, tasks, rootTaskIds: Array.isArray(g.rootTaskIds) ? g.rootTaskIds : [] }
-}
-
-function mergeRemoteGraphPreservingLocalUi(remote: Graph): Graph {
-  const local = useAppStore.getState()
-  const tasks: Record<string, any> = { ...(remote.tasks || {}) }
-  for (const [id, rt] of Object.entries(tasks)) {
-    const lt = (local.tasks as any)?.[id]
-    if (lt && typeof lt.expanded === 'boolean') {
-      tasks[id] = { ...(rt as any), expanded: lt.expanded }
-    }
-  }
-  return { users: remote.users || {}, tasks, rootTaskIds: Array.isArray(remote.rootTaskIds) ? remote.rootTaskIds : [] }
 }
 
 function wsBase(): string {
@@ -166,7 +154,7 @@ export function useCollab() {
             return
           }
           ignoreNextRef.current = true
-          useAppStore.getState().setGraph(mergeRemoteGraphPreservingLocalUi(remote))
+          useAppStore.getState().setGraph(remote)
           revRef.current = Number(data.rev ?? 0)
           setState((s) => ({ ...s, rev: revRef.current }))
         }
@@ -312,7 +300,7 @@ export function useCollab() {
               maybeBootstrapLocalToServer()
             } else {
               ignoreNextRef.current = true
-              useAppStore.getState().setGraph(mergeRemoteGraphPreservingLocalUi(remote))
+              useAppStore.getState().setGraph(remote)
             }
           }
           if (Array.isArray(msg.peers)) {
@@ -346,7 +334,7 @@ export function useCollab() {
             if (msg.from === me.clientId) return
 
             ignoreNextRef.current = true
-            useAppStore.getState().setGraph(mergeRemoteGraphPreservingLocalUi(msg.graph as Graph))
+            useAppStore.getState().setGraph(msg.graph as Graph)
           }
           return
         }

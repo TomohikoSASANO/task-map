@@ -11,7 +11,7 @@ const nodeTypes = { task: TaskNode }
 const edgeTypes = { floating: FloatingEdge }
 
 export const Canvas: React.FC = () => {
-    const graph = useAppStore((s) => ({ tasks: s.tasks, rootTaskIds: s.rootTaskIds }))
+    const graph = useAppStore((s) => ({ tasks: s.tasks, rootTaskIds: s.rootTaskIds, uiExpanded: (s as any).uiExpanded as Record<string, boolean> }))
     const focusTaskId = useAppStore((s) => (s as any).focusTaskId as string | null)
     const isMobile = useIsMobile()
     const mobileHoldDragId = useAppStore((s) => (s as any).mobileHoldDragId as string | null)
@@ -90,8 +90,8 @@ export const Canvas: React.FC = () => {
             const p = graph.tasks[cur.parentId]
             // If parent is missing (data inconsistency), keep it visible rather than hiding everything.
             if (!p) return true
-            // Only collapse when explicitly false (older graphs may omit `expanded`)
-            if (p.expanded === false) return false
+            // Collapse is UI-only: only when explicitly false in uiExpanded
+            if (graph.uiExpanded?.[p.id] === false) return false
             cur = p
         }
         return true
@@ -176,6 +176,7 @@ export const Canvas: React.FC = () => {
                     const cur = useAppStore.getState()
                     const tasks = { ...cur.tasks }
                     const rootTaskIds = [...cur.rootTaskIds]
+                    const uiExpanded = { ...(cur as any).uiExpanded }
                     const removeRecursive = (id: string) => {
                         const t = tasks[id]
                         if (!t) return
@@ -191,6 +192,7 @@ export const Canvas: React.FC = () => {
                             if (ot.dependsOn.includes(id)) tasks[oid] = { ...ot, dependsOn: ot.dependsOn.filter((x) => x !== id) }
                         })
                         delete tasks[id]
+                        delete uiExpanded[id]
                     }
                     selected.forEach((n) => removeRecursive(n.id))
                     useAppStore.getState().setGraph({ tasks, users: cur.users, rootTaskIds })
@@ -218,7 +220,7 @@ export const Canvas: React.FC = () => {
                             deadline: { dateISO: t.deadline?.dateISO ?? null },
                             done: !!t.done,
                             memo: (t as any).memo,
-                            expanded: !!t.expanded,
+                            expanded: (graph.uiExpanded?.[id] !== false),
                             parentId: t.parentId && selectedIds.has(t.parentId) ? t.parentId : null,
                             dependsOn: (t.dependsOn ?? []).filter((d) => selectedIds.has(d)),
                             position: t.position ?? { x: 0, y: 0 },
@@ -261,9 +263,10 @@ export const Canvas: React.FC = () => {
                             useAppStore.getState().updateTask(created.id, {
                                 position: { x: n.position.x + offsetX, y: n.position.y + offsetY },
                                 done: !!n.done,
-                                expanded: !!n.expanded,
                                 memo: n.memo,
                             } as any)
+                            // UI-only
+                            ;(useAppStore.getState() as any).setUiExpanded(created.id, !!n.expanded)
                             pending.delete(oid)
                         }
                     }

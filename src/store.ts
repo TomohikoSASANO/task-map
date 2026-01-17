@@ -25,6 +25,7 @@ export type Actions = {
     linkPrecedence(beforeId: TaskId, afterId: TaskId): void
     unlinkPrecedence(beforeId: TaskId, afterId: TaskId): void
     toggleExpand(taskId: TaskId): void
+    setUiExpanded(taskId: TaskId, expanded: boolean): void
     moveSubtree(taskId: TaskId, toX: number, toY: number): void
     beginDragAbsolute(rootId: TaskId): void
     dragToAbsolute(rootId: TaskId, toX: number, toY: number): void
@@ -34,6 +35,8 @@ export type Actions = {
 }
 
 export type AppState = Graph & Derived & Actions & {
+    // UI-only (not synced): collapse/expand state per task.
+    uiExpanded: Record<TaskId, boolean>
     draggingId: TaskId | null
     ripples: { id: string; nodeId: TaskId; createdAt: number }[]
     setDragging(id: TaskId | null): void
@@ -97,6 +100,7 @@ export const useAppStore = create<AppState>()(
     persist(
         (set, get) => ({
             ...initialState,
+            uiExpanded: {},
             draggingId: null,
             ripples: [],
             focusTaskId: null,
@@ -160,7 +164,6 @@ export const useAppStore = create<AppState>()(
                     children: [],
                     dependsOn: [],
                     position: { x: 0, y: 0 },
-                    expanded: false,
                 }
                 set((s) => {
                     const tasks = { ...s.tasks, [id]: task }
@@ -231,8 +234,10 @@ export const useAppStore = create<AppState>()(
                 set((s) => {
                     const t = s.tasks[taskId]
                     if (!t) return {}
-                    const nextExpanded = !t.expanded
-                    const tasks = { ...s.tasks, [taskId]: { ...t, expanded: nextExpanded } }
+                    const curExpanded = s.uiExpanded[taskId] !== false
+                    const nextExpanded = !curExpanded
+                    const uiExpanded = { ...s.uiExpanded, [taskId]: nextExpanded }
+                    const tasks = { ...s.tasks }
                     if (nextExpanded && t.children.length > 0) {
                         const n = t.children.length
                         const radius = 140
@@ -252,8 +257,11 @@ export const useAppStore = create<AppState>()(
                             }
                         })
                     }
-                    return { tasks }
+                    return { tasks, uiExpanded }
                 })
+            },
+            setUiExpanded: (taskId, expanded) => {
+                set((s) => ({ uiExpanded: { ...s.uiExpanded, [taskId]: expanded } }))
             },
             moveSubtree: (taskId, toX, toY) => {
                 set((s) => {
@@ -330,14 +338,28 @@ export const useAppStore = create<AppState>()(
                         const t = tasks[id]
                         const x = (i % 6) * spacing
                         const y = Math.floor(i / 6) * spacing
-                        tasks[id] = { ...t, expanded: false, position: { x, y } }
+                        tasks[id] = { ...t, position: { x, y } }
                         i++
                     })
-                    return { tasks }
+                    // Collapse all tasks in UI.
+                    const uiExpanded: Record<TaskId, boolean> = {}
+                    Object.keys(tasks).forEach((id) => {
+                        uiExpanded[id] = false
+                    })
+                    return { tasks, uiExpanded }
                 })
             },
             setGraph: (next) => {
-                set(() => ({ tasks: next.tasks, users: next.users, rootTaskIds: next.rootTaskIds }))
+                set((s) => {
+                    const nextTasks = next.tasks
+                    const nextUi: Record<TaskId, boolean> = {}
+                    for (const [id, v] of Object.entries(s.uiExpanded || {})) {
+                        if (Object.prototype.hasOwnProperty.call(nextTasks, id) && typeof v === 'boolean') {
+                            nextUi[id] = v as boolean
+                        }
+                    }
+                    return { tasks: next.tasks, users: next.users, rootTaskIds: next.rootTaskIds, uiExpanded: nextUi }
+                })
             },
         }),
         { name: 'task-map-store' }
