@@ -25,6 +25,7 @@ const AppInner: React.FC = () => {
     const { collab } = useCollabContext()
     const mobileSheetTaskId = useAppStore((s) => s.mobileSheetTaskId)
     const tasksCount = Object.keys(useAppStore((s) => s.tasks)).length
+    const prevTasksCountRef = React.useRef<number>(tasksCount)
     const [showOffline, setShowOffline] = useState(false)
     const offlineTimerRef = React.useRef<number | null>(null)
     const [lastErr, setLastErr] = useState<CapturedError | null>(() => {
@@ -74,6 +75,24 @@ const AppInner: React.FC = () => {
             window.removeEventListener('unhandledrejection', onRej)
         }
     }, [])
+
+    // If tasks suddenly drop to 0 (without a reload), treat as an anomaly and surface it.
+    useEffect(() => {
+        const prev = prevTasksCountRef.current
+        prevTasksCountRef.current = tasksCount
+        if (prev > 0 && tasksCount === 0) {
+            let extra = ''
+            try {
+                const a = localStorage.getItem('taskmap-last-sync-anomaly')
+                if (a) extra += `\n\nlast_sync_anomaly=${a}`
+            } catch {}
+            const msg = `[GraphWipe] tasks ${prev} -> 0 (connected=${collab.connected}, peers=${collab.peers.length}, rev=${collab.rev})${extra}`
+            const stack = new Error('GraphWipe').stack
+            const e: CapturedError = { at: Date.now(), message: msg, stack }
+            setLastErr(e)
+            try { localStorage.setItem('taskmap-last-error', JSON.stringify(e)) } catch {}
+        }
+    }, [tasksCount, collab.connected, collab.peers.length, collab.rev])
 
     // If offline persists, show a reload prompt (avoid silent "everything disappeared" UX).
     useEffect(() => {
@@ -131,6 +150,7 @@ const AppInner: React.FC = () => {
                         ? `同期中（オンライン ${Math.max(1, collab.peers.length)}）`
                         : (collab.reconnecting ? '再接続中…' : 'オフライン（ローカルのみ）')}
                 </div>
+                <div className="text-xs text-slate-400">tasks:{tasksCount}</div>
                 {lastErr && (
                     <button
                         type="button"
