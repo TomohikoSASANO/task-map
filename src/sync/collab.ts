@@ -315,10 +315,14 @@ export function useCollab() {
         if (msg?.type === 'state') {
           if (msg.graph) {
             dlog('[Collab] Received state update', { rev: msg.rev, from: msg.from, tasksCount: Object.keys(msg.graph.tasks || {}).length })
-            ignoreNextRef.current = true
-            useAppStore.getState().setGraph(msg.graph as Graph)
             revRef.current = Number(msg.rev ?? revRef.current)
             setState((s) => ({ ...s, rev: revRef.current }))
+            // If this is our own update echoed back as an ack, don't re-apply the same graph.
+            // We only need the authoritative `rev` from the server.
+            if (msg.from === me.clientId) return
+
+            ignoreNextRef.current = true
+            useAppStore.getState().setGraph(msg.graph as Graph)
           }
           return
         }

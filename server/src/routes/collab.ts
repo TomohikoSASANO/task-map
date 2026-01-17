@@ -220,7 +220,11 @@ export async function collabRoutes(app: FastifyInstance) {
             // ignore
           }
 
-          broadcast(mapKey, { type: 'state', rev: st.rev, graph, from: clientId }, clientId)
+          // IMPORTANT: also notify the sender so it can advance its local rev.
+          // Without this, single-user edits can get stuck once the sender's rev lags behind.
+          const stateMsg = { type: 'state', rev: st.rev, graph, from: clientId }
+          wsSend(ws, stateMsg)
+          broadcast(mapKey, stateMsg, clientId)
           return
         }
       })
