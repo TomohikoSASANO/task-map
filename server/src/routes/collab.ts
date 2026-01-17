@@ -29,6 +29,35 @@ const MAPS = new Map<string, ServerMapState>() // key: mapKey (slug)
 
 const DEFAULT_GRAPH: Graph = { users: {}, tasks: {}, rootTaskIds: [] }
 
+function uniqStrings(xs: string[]): string[] {
+  return Array.from(new Set(xs.filter((x) => typeof x === 'string' && x.length > 0)))
+}
+
+function normalizeGraph(g: Graph): Graph {
+  const tasks = (g?.tasks && typeof g.tasks === 'object') ? g.tasks : {}
+  const users = (g?.users && typeof g.users === 'object') ? g.users : {}
+  const rootTaskIds = Array.isArray(g?.rootTaskIds) ? g.rootTaskIds : []
+  const merged: Graph = { tasks, users, rootTaskIds: uniqStrings(rootTaskIds) }
+  // Keep only roots that exist.
+  merged.rootTaskIds = merged.rootTaskIds.filter((id) => Object.prototype.hasOwnProperty.call(tasks, id))
+  return merged
+}
+
+// Merge policy to prevent catastrophic "wipe":
+// - Incoming graph updates/overrides existing tasks by id
+// - Missing tasks in incoming do NOT delete existing tasks
+// - Roots are unioned and de-duped, then filtered to existing tasks
+function mergeGraph(prev: Graph, incoming: Graph): Graph {
+  const p = normalizeGraph(prev)
+  const n = normalizeGraph(incoming)
+  const tasks = { ...(p.tasks || {}), ...(n.tasks || {}) }
+  const users = { ...(p.users || {}), ...(n.users || {}) }
+  const rootTaskIds = uniqStrings([...(p.rootTaskIds || []), ...(n.rootTaskIds || [])]).filter((id) =>
+    Object.prototype.hasOwnProperty.call(tasks, id),
+  )
+  return { tasks, users, rootTaskIds }
+}
+
 async function ensureSystemMap(mapKey: string): Promise<{ mapId: string }> {
   const systemEmail = process.env.SYSTEM_USER_EMAIL || 'system@taskmap.local'
   const workspaceName = process.env.DEFAULT_WORKSPACE_NAME || 'Public Workspace'
@@ -209,12 +238,13 @@ export async function collabRoutes(app: FastifyInstance) {
           if (incomingRev < st.rev - 5) return
 
           st.rev += 1
-          st.graph = graph
+          // Merge instead of replace to avoid wiping others' tasks when a stale/empty graph arrives.
+          st.graph = mergeGraph(st.graph, graph)
 
           // persist snapshot (best-effort)
           try {
             await prisma.snapshot.create({
-              data: { mapId, data: { rev: st.rev, graph } as any, createdBy: clientId },
+              data: { mapId, data: { rev: st.rev, graph: st.graph } as any, createdBy: clientId },
             })
           } catch {
             // ignore
@@ -222,7 +252,7 @@ export async function collabRoutes(app: FastifyInstance) {
 
           // IMPORTANT: also notify the sender so it can advance its local rev.
           // Without this, single-user edits can get stuck once the sender's rev lags behind.
-          const stateMsg = { type: 'state', rev: st.rev, graph, from: clientId }
+          const stateMsg = { type: 'state', rev: st.rev, graph: st.graph, from: clientId }
           wsSend(ws, stateMsg)
           broadcast(mapKey, stateMsg, clientId)
           return
