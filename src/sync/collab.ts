@@ -141,6 +141,15 @@ export function useCollab() {
   const sendTimerRef = useRef<number | null>(null)
   const lastOutgoingIdsRef = useRef<Set<string> | null>(null)
 
+  // Seed deletion diff baseline so "first change is delete" is handled.
+  useEffect(() => {
+    try {
+      lastOutgoingIdsRef.current = new Set(Object.keys((useAppStore.getState().tasks as any) || {}))
+    } catch {
+      lastOutgoingIdsRef.current = new Set()
+    }
+  }, [])
+
   // Initial load from server (best-effort)
   useEffect(() => {
     let cancelled = false
@@ -161,12 +170,16 @@ export function useCollab() {
           // If server is empty but local has data (first time), don't wipe local.
           if (remoteCount === 0 && localCount > 0) {
             rememberAnomaly('api_empty_graph', { localCount, rev: data.rev })
+            // Keep baseline in sync with current local tasks to support deletions.
+            lastOutgoingIdsRef.current = new Set(Object.keys((local.tasks as any) || {}))
             revRef.current = Number(data.rev ?? 0)
             setState((s) => ({ ...s, rev: revRef.current }))
             return
           }
           ignoreNextRef.current = true
           useAppStore.getState().setGraph(remote)
+          // Set baseline to remote graph ids so subsequent deletions are detected.
+          lastOutgoingIdsRef.current = new Set(Object.keys(remote.tasks || {}))
           revRef.current = Number(data.rev ?? 0)
           setState((s) => ({ ...s, rev: revRef.current }))
         }
@@ -361,6 +374,7 @@ export function useCollab() {
             } else {
               ignoreNextRef.current = true
               useAppStore.getState().setGraph(remote)
+              lastOutgoingIdsRef.current = new Set(Object.keys(remote.tasks || {}))
             }
           }
           if (Array.isArray(msg.peers)) {
@@ -403,6 +417,7 @@ export function useCollab() {
 
             ignoreNextRef.current = true
             useAppStore.getState().setGraph(msg.graph as Graph)
+            lastOutgoingIdsRef.current = new Set(Object.keys(((msg.graph as Graph).tasks as any) || {}))
           }
           return
         }
