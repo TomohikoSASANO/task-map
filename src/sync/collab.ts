@@ -139,6 +139,7 @@ export function useCollab() {
   const hasInitRef = useRef(false)
   const serverEmptyAtInitRef = useRef<boolean | null>(null)
   const sendTimerRef = useRef<number | null>(null)
+  const lastOutgoingIdsRef = useRef<Set<string> | null>(null)
 
   // Initial load from server (best-effort)
   useEffect(() => {
@@ -182,6 +183,14 @@ export function useCollab() {
     return stripUiFieldsFromGraph(graph)
   }
 
+  const computeDeletedTaskIds = (outgoing: Graph): string[] => {
+    const nextIds = new Set(Object.keys(outgoing.tasks || {}))
+    const prevIds = lastOutgoingIdsRef.current
+    const deleted = prevIds ? Array.from(prevIds).filter((id) => !nextIds.has(id)) : []
+    lastOutgoingIdsRef.current = nextIds
+    return deleted
+  }
+
   const flushToServer = async (reason: string) => {
     // cancel scheduled ws send
     if (sendTimerRef.current) {
@@ -189,18 +198,19 @@ export function useCollab() {
       sendTimerRef.current = null
     }
     const outgoing = getOutgoingGraph()
+    const deletedTaskIds = computeDeletedTaskIds(outgoing)
     const ws = wsRef.current
     // Prefer WS when open.
     if (ws && ws.readyState === WebSocket.OPEN && hasInitRef.current) {
       try {
-        dlog('[Collab] flush via ws', { reason, rev: revRef.current, tasksCount: Object.keys(outgoing.tasks || {}).length })
-        ws.send(JSON.stringify({ type: 'state', rev: revRef.current, graph: outgoing }))
+        dlog('[Collab] flush via ws', { reason, rev: revRef.current, tasksCount: Object.keys(outgoing.tasks || {}).length, deleted: deletedTaskIds.length })
+        ws.send(JSON.stringify({ type: 'state', rev: revRef.current, graph: outgoing, deletedTaskIds }))
         return
       } catch {}
     }
     // Fallback: HTTP keepalive (works on unload/pagehide)
     try {
-      const body = JSON.stringify({ rev: revRef.current, graph: outgoing, clientId: me.clientId })
+      const body = JSON.stringify({ rev: revRef.current, graph: outgoing, deletedTaskIds, clientId: me.clientId })
       await fetch(`${apiBase()}/api/maps/${encodeURIComponent(mapKey)}/state`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -461,6 +471,7 @@ export function useCollab() {
 
       const graph: Graph = { tasks: s.tasks as any, users: s.users as any, rootTaskIds: s.rootTaskIds as any }
       const outgoing = stripUiFieldsFromGraph(graph)
+      const deletedTaskIds = computeDeletedTaskIds(outgoing)
       const serialized = JSON.stringify(outgoing)
       if (serialized === last) return
       last = serialized
@@ -468,8 +479,8 @@ export function useCollab() {
       if (sendTimerRef.current) clearTimeout(sendTimerRef.current)
       sendTimerRef.current = window.setTimeout(() => {
         try {
-          dlog('[Collab] Sending state update', { rev: revRef.current, tasksCount: Object.keys(outgoing.tasks || {}).length })
-          ws.send(JSON.stringify({ type: 'state', rev: revRef.current, graph: outgoing }))
+          dlog('[Collab] Sending state update', { rev: revRef.current, tasksCount: Object.keys(outgoing.tasks || {}).length, deleted: deletedTaskIds.length })
+          ws.send(JSON.stringify({ type: 'state', rev: revRef.current, graph: outgoing, deletedTaskIds }))
         } catch (err) {
           derr('[Collab] Failed to send state', err)
         }

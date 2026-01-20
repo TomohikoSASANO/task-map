@@ -140,6 +140,31 @@ function mergeGraph(prev: Graph, incoming: Graph): Graph {
   return sanitizeGraph({ tasks, users, rootTaskIds })
 }
 
+function applyDeletions(prev: Graph, deletedTaskIds: string[]): Graph {
+  const del = uniqStrings(Array.isArray(deletedTaskIds) ? deletedTaskIds : [])
+  if (del.length === 0) return sanitizeGraph(prev)
+  const delSet = new Set(del)
+
+  const n = normalizeGraph(prev)
+  const tasks: Record<string, any> = { ...(n.tasks || {}) }
+  for (const id of delSet) delete tasks[id]
+
+  // Remove references to deleted ids (parent/dependsOn/root).
+  for (const id of Object.keys(tasks)) {
+    const t = tasks[id]
+    if (!isPlainObject(t)) continue
+    if (typeof t.parentId === 'string' && delSet.has(t.parentId)) {
+      t.parentId = null
+    }
+    if (Array.isArray(t.dependsOn)) {
+      t.dependsOn = t.dependsOn.filter((x: any) => typeof x === 'string' && !delSet.has(x))
+    }
+  }
+
+  const rootTaskIds = (Array.isArray(n.rootTaskIds) ? n.rootTaskIds : []).filter((id) => typeof id === 'string' && !delSet.has(id))
+  return sanitizeGraph({ users: n.users || {}, tasks, rootTaskIds })
+}
+
 async function ensureSystemMap(mapKey: string): Promise<{ mapId: string }> {
   const systemEmail = process.env.SYSTEM_USER_EMAIL || 'system@taskmap.local'
   const workspaceName = process.env.DEFAULT_WORKSPACE_NAME || 'Public Workspace'
@@ -256,6 +281,7 @@ export async function collabRoutes(app: FastifyInstance) {
     const body = (req.body as any) || {}
     const incomingRev = Number(body.rev ?? -1)
     const graph = body.graph as Graph
+    const deletedTaskIds = Array.isArray(body.deletedTaskIds) ? (body.deletedTaskIds as string[]) : []
     const clientId = typeof body.clientId === 'string' ? body.clientId : undefined
     if (!graph?.tasks || !graph?.users || !Array.isArray(graph?.rootTaskIds)) {
       return reply.status(400).send({ ok: false, error: 'invalid_graph' })
@@ -267,7 +293,7 @@ export async function collabRoutes(app: FastifyInstance) {
     }
     // Advance rev safely even if client claims a higher number.
     st.rev = Math.max(st.rev, Number.isFinite(incomingRev) ? incomingRev : st.rev) + 1
-    st.graph = mergeGraph(st.graph, graph)
+    st.graph = applyDeletions(mergeGraph(st.graph, graph), deletedTaskIds)
 
     try {
       await prisma.snapshot.create({
@@ -376,6 +402,7 @@ export async function collabRoutes(app: FastifyInstance) {
         if (msg?.type === 'state') {
           const incomingRev = Number(msg.rev ?? -1)
           const graph = msg.graph as Graph
+          const deletedTaskIds = Array.isArray(msg.deletedTaskIds) ? (msg.deletedTaskIds as string[]) : []
           if (!graph?.tasks || !graph?.users || !Array.isArray(graph?.rootTaskIds)) return
 
           // Avoid accepting stale full-state that can rollback newer changes.
@@ -388,7 +415,7 @@ export async function collabRoutes(app: FastifyInstance) {
           // Advance rev safely even if client claims a higher number.
           st.rev = Math.max(st.rev, Number.isFinite(incomingRev) ? incomingRev : st.rev) + 1
           // Merge instead of replace to avoid wiping others' tasks when a stale/empty graph arrives.
-          st.graph = mergeGraph(st.graph, graph)
+          st.graph = applyDeletions(mergeGraph(st.graph, graph), deletedTaskIds)
 
           // persist snapshot (best-effort)
           try {
