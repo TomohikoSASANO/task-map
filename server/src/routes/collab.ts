@@ -23,6 +23,7 @@ type ServerMapState = {
   graph: Graph
   peers: Map<string, PeerPresence>
   sockets: Map<string, Set<any>> // clientId -> sockets
+  lastPersistError: { at: number; message: string } | null
 }
 
 const MAPS = new Map<string, ServerMapState>() // key: mapKey (slug)
@@ -194,7 +195,7 @@ async function loadLatestSnapshot(mapId: string): Promise<{ rev: number; graph: 
 function getOrInitMapState(mapKey: string): ServerMapState {
   let st = MAPS.get(mapKey)
   if (!st) {
-    st = { rev: 0, graph: DEFAULT_GRAPH, peers: new Map(), sockets: new Map() }
+    st = { rev: 0, graph: DEFAULT_GRAPH, peers: new Map(), sockets: new Map(), lastPersistError: null }
     MAPS.set(mapKey, st)
   }
   return st
@@ -235,7 +236,53 @@ export async function collabRoutes(app: FastifyInstance) {
       }
     }
   // Always serve a sanitized graph to clients.
-  return reply.send({ ok: true, rev: st.rev, graph: sanitizeGraph(st.graph) })
+  return reply.send({ ok: true, rev: st.rev, graph: sanitizeGraph(st.graph), lastPersistError: st.lastPersistError })
+  })
+
+  // POST save graph (for beforeunload/pagehide keepalive flush)
+  app.post('/api/maps/:mapKey/state', async (req, reply) => {
+    const mapKey = (req.params as any).mapKey as string
+    const { mapId } = await ensureSystemMap(mapKey)
+    const st = getOrInitMapState(mapKey)
+    // lazy-load from DB once per process
+    if (st.rev === 0 && st.graph === DEFAULT_GRAPH) {
+      const latest = await loadLatestSnapshot(mapId)
+      if (latest) {
+        st.rev = latest.rev
+        st.graph = sanitizeGraph(latest.graph)
+      }
+    }
+
+    const body = (req.body as any) || {}
+    const incomingRev = Number(body.rev ?? -1)
+    const graph = body.graph as Graph
+    const clientId = typeof body.clientId === 'string' ? body.clientId : undefined
+    if (!graph?.tasks || !graph?.users || !Array.isArray(graph?.rootTaskIds)) {
+      return reply.status(400).send({ ok: false, error: 'invalid_graph' })
+    }
+
+    // Avoid accepting stale full-state that can rollback newer changes.
+    if (Number.isFinite(incomingRev) && incomingRev < st.rev) {
+      return reply.send({ ok: true, accepted: false, rev: st.rev })
+    }
+    // Advance rev safely even if client claims a higher number.
+    st.rev = Math.max(st.rev, Number.isFinite(incomingRev) ? incomingRev : st.rev) + 1
+    st.graph = mergeGraph(st.graph, graph)
+
+    try {
+      await prisma.snapshot.create({
+        data: { mapId, data: { rev: st.rev, graph: st.graph } as any, createdBy: clientId },
+      })
+      st.lastPersistError = null
+    } catch (e: any) {
+      const msg = String(e?.message || e || 'snapshot_create_failed')
+      st.lastPersistError = { at: Date.now(), message: msg }
+    }
+
+    // Broadcast to connected peers (best-effort).
+    const stateMsg = { type: 'state', rev: st.rev, graph: st.graph, from: clientId ?? 'http' }
+    broadcast(mapKey, stateMsg)
+    return reply.send({ ok: true, accepted: true, rev: st.rev })
   })
 
   // WS: realtime collaboration
@@ -331,10 +378,15 @@ export async function collabRoutes(app: FastifyInstance) {
           const graph = msg.graph as Graph
           if (!graph?.tasks || !graph?.users || !Array.isArray(graph?.rootTaskIds)) return
 
-          // last-write-wins, but ignore obviously old revs
-          if (incomingRev < st.rev - 5) return
+          // Avoid accepting stale full-state that can rollback newer changes.
+          if (Number.isFinite(incomingRev) && incomingRev < st.rev) {
+            // Force the sender to resync (prevents "stuck edits" while keeping server authoritative).
+            wsSend(ws, { type: 'state', rev: st.rev, graph: st.graph, from: 'server' })
+            return
+          }
 
-          st.rev += 1
+          // Advance rev safely even if client claims a higher number.
+          st.rev = Math.max(st.rev, Number.isFinite(incomingRev) ? incomingRev : st.rev) + 1
           // Merge instead of replace to avoid wiping others' tasks when a stale/empty graph arrives.
           st.graph = mergeGraph(st.graph, graph)
 
@@ -343,8 +395,10 @@ export async function collabRoutes(app: FastifyInstance) {
             await prisma.snapshot.create({
               data: { mapId, data: { rev: st.rev, graph: st.graph } as any, createdBy: clientId },
             })
+            st.lastPersistError = null
           } catch {
-            // ignore
+            // surface to clients via init/api
+            st.lastPersistError = { at: Date.now(), message: 'snapshot_create_failed' }
           }
 
           // IMPORTANT: also notify the sender so it can advance its local rev.

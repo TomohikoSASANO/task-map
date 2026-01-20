@@ -152,7 +152,16 @@ export const Canvas: React.FC = () => {
             const rect = el.getBoundingClientRect()
             if (rect.width < 10 || rect.height < 10) return
             const domNodes = el.querySelectorAll('.react-flow__node').length
+            const rfNodesCount = (() => {
+                try { return rf.getNodes().length } catch { return -1 }
+            })()
+            const viewportEl = el.querySelector('.react-flow__viewport') as HTMLElement | null
+            const transform = viewportEl?.style?.transform || ''
+            const transformBad = transform.includes('NaN') || transform.includes('Infinity')
+
+            // Healthy if DOM nodes exist OR ReactFlow reports nodes (even if DOM is temporarily not painted).
             if (domNodes > 0) return
+            if (rfNodesCount > 0 && !transformBad) return
 
             const now = Date.now()
             if (now - lastRecoverAtRef.current < 8000) return
@@ -160,7 +169,7 @@ export const Canvas: React.FC = () => {
             lastRecoverAtRef.current = now
             recoverCountRef.current += 1
 
-            const msg = `[RenderBlank] tasks=${totalTasks} nodesMemo=${expected} domNodes=${domNodes} connected=${collab.connected} rev=${collab.rev} recover=${recoverCountRef.current} rect=${Math.round(rect.width)}x${Math.round(rect.height)}`
+            const msg = `[RenderBlank] tasks=${totalTasks} nodesMemo=${expected} domNodes=${domNodes} rfNodes=${rfNodesCount} transformBad=${transformBad} connected=${collab.connected} rev=${collab.rev} recover=${recoverCountRef.current} rect=${Math.round(rect.width)}x${Math.round(rect.height)}`
             const e = { at: now, message: msg, stack: new Error('RenderBlank').stack }
             try {
                 localStorage.setItem('taskmap-last-error', JSON.stringify(e))
@@ -171,6 +180,8 @@ export const Canvas: React.FC = () => {
 
             setRfMountKey((k) => k + 1)
             window.setTimeout(() => {
+                // reset viewport first (sometimes helps when transform becomes invalid)
+                try { rf.setViewport({ x: 0, y: 0, zoom: 1 }) } catch { }
                 try { rf.fitView({ padding: 0.2, duration: 250 } as any) } catch { }
             }, 200)
         }, 2000)

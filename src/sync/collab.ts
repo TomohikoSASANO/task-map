@@ -138,6 +138,7 @@ export function useCollab() {
   const bootstrappedRef = useRef(false)
   const hasInitRef = useRef(false)
   const serverEmptyAtInitRef = useRef<boolean | null>(null)
+  const sendTimerRef = useRef<number | null>(null)
 
   // Initial load from server (best-effort)
   useEffect(() => {
@@ -148,6 +149,9 @@ export function useCollab() {
         if (!res.ok) return
         const data = await res.json()
         if (cancelled) return
+        if (data?.lastPersistError) {
+          rememberAnomaly('server_persist_error', data.lastPersistError)
+        }
         if (data?.graph) {
           const remote = data.graph as Graph
           const local = useAppStore.getState()
@@ -171,6 +175,44 @@ export function useCollab() {
       cancelled = true
     }
   }, [mapKey])
+
+  const getOutgoingGraph = (): Graph => {
+    const s = useAppStore.getState()
+    const graph: Graph = { tasks: s.tasks as any, users: s.users as any, rootTaskIds: s.rootTaskIds as any }
+    return stripUiFieldsFromGraph(graph)
+  }
+
+  const flushToServer = async (reason: string) => {
+    // cancel scheduled ws send
+    if (sendTimerRef.current) {
+      clearTimeout(sendTimerRef.current)
+      sendTimerRef.current = null
+    }
+    const outgoing = getOutgoingGraph()
+    const ws = wsRef.current
+    // Prefer WS when open.
+    if (ws && ws.readyState === WebSocket.OPEN && hasInitRef.current) {
+      try {
+        dlog('[Collab] flush via ws', { reason, rev: revRef.current, tasksCount: Object.keys(outgoing.tasks || {}).length })
+        ws.send(JSON.stringify({ type: 'state', rev: revRef.current, graph: outgoing }))
+        return
+      } catch {}
+    }
+    // Fallback: HTTP keepalive (works on unload/pagehide)
+    try {
+      const body = JSON.stringify({ rev: revRef.current, graph: outgoing, clientId: me.clientId })
+      await fetch(`${apiBase()}/api/maps/${encodeURIComponent(mapKey)}/state`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body,
+        keepalive: true as any,
+        credentials: 'include',
+      } as any)
+      dlog('[Collab] flush via http', { reason })
+    } catch (e) {
+      derr('[Collab] flush http failed', e)
+    }
+  }
 
   const maybeBootstrapLocalToServer = () => {
     if (bootstrappedRef.current) return
@@ -370,11 +412,23 @@ export function useCollab() {
     window.addEventListener('online', onOnline)
     document.addEventListener('visibilitychange', onVis)
 
+    // Flush best-effort on unload/navigation (prevents "reload rollback")
+    const onPageHide = () => {
+      void flushToServer('pagehide')
+    }
+    const onBeforeUnload = () => {
+      void flushToServer('beforeunload')
+    }
+    window.addEventListener('pagehide', onPageHide)
+    window.addEventListener('beforeunload', onBeforeUnload)
+
     return () => {
       unmountedRef.current = true
       clearTimers()
       window.removeEventListener('online', onOnline)
       document.removeEventListener('visibilitychange', onVis)
+      window.removeEventListener('pagehide', onPageHide)
+      window.removeEventListener('beforeunload', onBeforeUnload)
       try {
         wsRef.current?.close?.()
       } catch {}
@@ -411,15 +465,15 @@ export function useCollab() {
       if (serialized === last) return
       last = serialized
       lastSentGraphRef.current = serialized
-      ;(window as any).__taskmapSendTimer && clearTimeout((window as any).__taskmapSendTimer)
-      ;(window as any).__taskmapSendTimer = setTimeout(() => {
+      if (sendTimerRef.current) clearTimeout(sendTimerRef.current)
+      sendTimerRef.current = window.setTimeout(() => {
         try {
           dlog('[Collab] Sending state update', { rev: revRef.current, tasksCount: Object.keys(outgoing.tasks || {}).length })
           ws.send(JSON.stringify({ type: 'state', rev: revRef.current, graph: outgoing }))
         } catch (err) {
           derr('[Collab] Failed to send state', err)
         }
-      }, 250)
+      }, 200)
     })
     return () => unsub()
   }, [])
