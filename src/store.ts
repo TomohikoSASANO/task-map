@@ -150,6 +150,7 @@ export const useAppStore = create<AppState>()(
                 })
             },
             createTask: (input?: CreateTaskInput) => {
+                const now = Date.now()
                 const id = generateId('t')
                 const parentId = input?.parentId ?? null
                 const parent = parentId ? get().tasks[parentId] : undefined
@@ -164,13 +165,15 @@ export const useAppStore = create<AppState>()(
                     children: [],
                     dependsOn: [],
                     position: { x: 0, y: 0 },
+                    updatedAt: now,
                 }
                 set((s) => {
                     const tasks = { ...s.tasks, [id]: task }
                     const rootTaskIds = [...s.rootTaskIds]
                     if (parentId) {
                         const p = tasks[parentId]
-                        p.children = [...p.children, id]
+                        // parent structure changed -> touch updatedAt too
+                        tasks[parentId] = { ...p, children: [...p.children, id], updatedAt: now }
                     } else {
                         rootTaskIds.push(id)
                     }
@@ -187,6 +190,7 @@ export const useAppStore = create<AppState>()(
                         ...t,
                         ...patch,
                         deadline: patch.deadline ? { ...t.deadline, ...patch.deadline } : t.deadline,
+                        updatedAt: Date.now(),
                     }
                     return { tasks: { ...s.tasks, [taskId]: updated } }
                 })
@@ -196,16 +200,17 @@ export const useAppStore = create<AppState>()(
                 set((s) => {
                     const t = s.tasks[taskId]
                     if (!t) return {}
-                    const updated: Task = { ...t, position: { x, y } }
+                    const updated: Task = { ...t, position: { x, y }, updatedAt: Date.now() }
                     return { tasks: { ...s.tasks, [taskId]: updated } }
                 })
             },
             setPositions: (updates) => {
                 set((s) => {
+                    const now = Date.now()
                     const tasks = { ...s.tasks }
                     Object.entries(updates).forEach(([id, pos]) => {
                         const t = tasks[id]
-                        if (t) tasks[id] = { ...t, position: { x: pos.x, y: pos.y } }
+                        if (t) tasks[id] = { ...t, position: { x: pos.x, y: pos.y }, updatedAt: now }
                     })
                     return { tasks }
                 })
@@ -216,7 +221,7 @@ export const useAppStore = create<AppState>()(
                     const after = s.tasks[afterId]
                     if (!after) return {}
                     if (!after.dependsOn.includes(beforeId)) {
-                        const updated: Task = { ...after, dependsOn: [...after.dependsOn, beforeId] }
+                        const updated: Task = { ...after, dependsOn: [...after.dependsOn, beforeId], updatedAt: Date.now() }
                         return { tasks: { ...s.tasks, [afterId]: updated } }
                     }
                     return {}
@@ -226,12 +231,13 @@ export const useAppStore = create<AppState>()(
                 set((s) => {
                     const after = s.tasks[afterId]
                     if (!after) return {}
-                    const updated: Task = { ...after, dependsOn: after.dependsOn.filter((id) => id !== beforeId) }
+                    const updated: Task = { ...after, dependsOn: after.dependsOn.filter((id) => id !== beforeId), updatedAt: Date.now() }
                     return { tasks: { ...s.tasks, [afterId]: updated } }
                 })
             },
             toggleExpand: (taskId) => {
                 set((s) => {
+                    const now = Date.now()
                     const t = s.tasks[taskId]
                     if (!t) return {}
                     const curExpanded = s.uiExpanded[taskId] !== false
@@ -253,6 +259,7 @@ export const useAppStore = create<AppState>()(
                                         x: (t.position?.x ?? 0) + Math.cos(angle) * radius,
                                         y: (t.position?.y ?? 0) + Math.sin(angle) * radius,
                                     },
+                                    updatedAt: now,
                                 }
                             }
                         })
@@ -265,6 +272,7 @@ export const useAppStore = create<AppState>()(
             },
             moveSubtree: (taskId, toX, toY) => {
                 set((s) => {
+                    const now = Date.now()
                     const target = s.tasks[taskId]
                     if (!target) return {}
                     const dx = toX - (target.position?.x ?? 0)
@@ -282,7 +290,7 @@ export const useAppStore = create<AppState>()(
                         const t = tasks[id]
                         const cx = t.position?.x ?? 0
                         const cy = t.position?.y ?? 0
-                        tasks[id] = { ...t, position: { x: cx + dx, y: cy + dy } }
+                        tasks[id] = { ...t, position: { x: cx + dx, y: cy + dy }, updatedAt: now }
                     })
                     return { tasks }
                 })
@@ -311,14 +319,15 @@ export const useAppStore = create<AppState>()(
                 const s0 = get() as any
                 const offsets = s0._dragOffsets as Record<TaskId, { x: number; y: number }> | undefined
                 set((s) => {
+                    const now = Date.now()
                     const tasks = { ...s.tasks }
                     const root = tasks[rootId]
-                    if (root) tasks[rootId] = { ...root, position: { x: toX, y: toY } }
+                    if (root) tasks[rootId] = { ...root, position: { x: toX, y: toY }, updatedAt: now }
                     if (offsets) {
                         Object.entries(offsets).forEach(([id, off]) => {
                             const t = tasks[id]
                             if (!t) return
-                            tasks[id] = { ...t, position: { x: toX + off.x, y: toY + off.y } }
+                            tasks[id] = { ...t, position: { x: toX + off.x, y: toY + off.y }, updatedAt: now }
                         })
                     }
                     return { tasks }
@@ -331,6 +340,7 @@ export const useAppStore = create<AppState>()(
             },
             gatherAll: () => {
                 set((s) => {
+                    const now = Date.now()
                     const tasks = { ...s.tasks }
                     const spacing = 140
                     let i = 0
@@ -338,7 +348,7 @@ export const useAppStore = create<AppState>()(
                         const t = tasks[id]
                         const x = (i % 6) * spacing
                         const y = Math.floor(i / 6) * spacing
-                        tasks[id] = { ...t, position: { x, y } }
+                        tasks[id] = { ...t, position: { x, y }, updatedAt: now }
                         i++
                     })
                     // Collapse all tasks in UI.

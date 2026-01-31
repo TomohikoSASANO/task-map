@@ -139,14 +139,18 @@ export function useCollab() {
   const hasInitRef = useRef(false)
   const serverEmptyAtInitRef = useRef<boolean | null>(null)
   const sendTimerRef = useRef<number | null>(null)
-  const lastOutgoingIdsRef = useRef<Set<string> | null>(null)
+  // Track deletions robustly:
+  // - lastLocalIdsRef: last observed local ids (for diffing)
+  // - pendingDeletedIdsRef: deletions since last server ack (sent on next state)
+  const lastLocalIdsRef = useRef<Set<string> | null>(null)
+  const pendingDeletedIdsRef = useRef<Set<string>>(new Set())
 
   // Seed deletion diff baseline so "first change is delete" is handled.
   useEffect(() => {
     try {
-      lastOutgoingIdsRef.current = new Set(Object.keys((useAppStore.getState().tasks as any) || {}))
+      lastLocalIdsRef.current = new Set(Object.keys((useAppStore.getState().tasks as any) || {}))
     } catch {
-      lastOutgoingIdsRef.current = new Set()
+      lastLocalIdsRef.current = new Set()
     }
   }, [])
 
@@ -171,7 +175,8 @@ export function useCollab() {
           if (remoteCount === 0 && localCount > 0) {
             rememberAnomaly('api_empty_graph', { localCount, rev: data.rev })
             // Keep baseline in sync with current local tasks to support deletions.
-            lastOutgoingIdsRef.current = new Set(Object.keys((local.tasks as any) || {}))
+            lastLocalIdsRef.current = new Set(Object.keys((local.tasks as any) || {}))
+            pendingDeletedIdsRef.current.clear()
             revRef.current = Number(data.rev ?? 0)
             setState((s) => ({ ...s, rev: revRef.current }))
             return
@@ -179,7 +184,8 @@ export function useCollab() {
           ignoreNextRef.current = true
           useAppStore.getState().setGraph(remote)
           // Set baseline to remote graph ids so subsequent deletions are detected.
-          lastOutgoingIdsRef.current = new Set(Object.keys(remote.tasks || {}))
+          lastLocalIdsRef.current = new Set(Object.keys(remote.tasks || {}))
+          pendingDeletedIdsRef.current.clear()
           revRef.current = Number(data.rev ?? 0)
           setState((s) => ({ ...s, rev: revRef.current }))
         }
@@ -196,12 +202,19 @@ export function useCollab() {
     return stripUiFieldsFromGraph(graph)
   }
 
-  const computeDeletedTaskIds = (outgoing: Graph): string[] => {
+  const updatePendingDeletionsFromLocal = (outgoing: Graph) => {
     const nextIds = new Set(Object.keys(outgoing.tasks || {}))
-    const prevIds = lastOutgoingIdsRef.current
-    const deleted = prevIds ? Array.from(prevIds).filter((id) => !nextIds.has(id)) : []
-    lastOutgoingIdsRef.current = nextIds
-    return deleted
+    const prev = lastLocalIdsRef.current
+    if (prev) {
+      for (const id of prev) {
+        if (!nextIds.has(id)) pendingDeletedIdsRef.current.add(id)
+      }
+      // If an id was re-added locally, remove it from pending deletions.
+      for (const id of nextIds) {
+        if (pendingDeletedIdsRef.current.has(id)) pendingDeletedIdsRef.current.delete(id)
+      }
+    }
+    lastLocalIdsRef.current = nextIds
   }
 
   const flushToServer = async (reason: string) => {
@@ -211,7 +224,8 @@ export function useCollab() {
       sendTimerRef.current = null
     }
     const outgoing = getOutgoingGraph()
-    const deletedTaskIds = computeDeletedTaskIds(outgoing)
+    updatePendingDeletionsFromLocal(outgoing)
+    const deletedTaskIds = Array.from(pendingDeletedIdsRef.current)
     const ws = wsRef.current
     // Prefer WS when open.
     if (ws && ws.readyState === WebSocket.OPEN && hasInitRef.current) {
@@ -232,6 +246,9 @@ export function useCollab() {
         credentials: 'include',
       } as any)
       dlog('[Collab] flush via http', { reason })
+      // Assume accepted best-effort; clear pending deletions so we don't repeat them forever.
+      // (Server is still authoritative; if rejected, it'll resend its state on next WS sync.)
+      pendingDeletedIdsRef.current.clear()
     } catch (e) {
       derr('[Collab] flush http failed', e)
     }
@@ -374,7 +391,8 @@ export function useCollab() {
             } else {
               ignoreNextRef.current = true
               useAppStore.getState().setGraph(remote)
-              lastOutgoingIdsRef.current = new Set(Object.keys(remote.tasks || {}))
+              lastLocalIdsRef.current = new Set(Object.keys(remote.tasks || {}))
+              pendingDeletedIdsRef.current.clear()
             }
           }
           if (Array.isArray(msg.peers)) {
@@ -404,8 +422,13 @@ export function useCollab() {
             revRef.current = Number(msg.rev ?? revRef.current)
             setState((s) => ({ ...s, rev: revRef.current }))
             // If this is our own update echoed back as an ack, don't re-apply the same graph.
-            // We only need the authoritative `rev` from the server.
-            if (msg.from === me.clientId) return
+            // But do clear pending deletions and advance baselines.
+            if (msg.from === me.clientId) {
+              const current = getOutgoingGraph()
+              lastLocalIdsRef.current = new Set(Object.keys(current.tasks || {}))
+              pendingDeletedIdsRef.current.clear()
+              return
+            }
 
             // Never apply a total wipe if we already have tasks. (Still allow normal deletes.)
             const remoteCount = Object.keys((msg.graph as any)?.tasks || {}).length
@@ -417,7 +440,8 @@ export function useCollab() {
 
             ignoreNextRef.current = true
             useAppStore.getState().setGraph(msg.graph as Graph)
-            lastOutgoingIdsRef.current = new Set(Object.keys(((msg.graph as Graph).tasks as any) || {}))
+            lastLocalIdsRef.current = new Set(Object.keys(((msg.graph as Graph).tasks as any) || {}))
+            pendingDeletedIdsRef.current.clear()
           }
           return
         }
@@ -467,6 +491,10 @@ export function useCollab() {
     const unsub = useAppStore.subscribe((s) => {
       if (ignoreNextRef.current) {
         ignoreNextRef.current = false
+        try {
+          lastLocalIdsRef.current = new Set(Object.keys((s.tasks as any) || {}))
+          pendingDeletedIdsRef.current.clear()
+        } catch {}
         return
       }
       const ws = wsRef.current
@@ -486,7 +514,7 @@ export function useCollab() {
 
       const graph: Graph = { tasks: s.tasks as any, users: s.users as any, rootTaskIds: s.rootTaskIds as any }
       const outgoing = stripUiFieldsFromGraph(graph)
-      const deletedTaskIds = computeDeletedTaskIds(outgoing)
+      updatePendingDeletionsFromLocal(outgoing)
       const serialized = JSON.stringify(outgoing)
       if (serialized === last) return
       last = serialized
@@ -494,6 +522,7 @@ export function useCollab() {
       if (sendTimerRef.current) clearTimeout(sendTimerRef.current)
       sendTimerRef.current = window.setTimeout(() => {
         try {
+          const deletedTaskIds = Array.from(pendingDeletedIdsRef.current)
           dlog('[Collab] Sending state update', { rev: revRef.current, tasksCount: Object.keys(outgoing.tasks || {}).length, deleted: deletedTaskIds.length })
           ws.send(JSON.stringify({ type: 'state', rev: revRef.current, graph: outgoing, deletedTaskIds }))
         } catch (err) {
