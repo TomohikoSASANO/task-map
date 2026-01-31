@@ -28,6 +28,13 @@ function randomColor() {
 
 function getClientId(): string {
   const key = 'taskmap-client-id'
+  // Optional override for testing multi-client behavior in one browser:
+  //   https://.../?cid=alice
+  try {
+    const url = new URL(window.location.href)
+    const cid = url.searchParams.get('cid')
+    if (cid && cid.trim()) return cid.trim()
+  } catch {}
   const existing = localStorage.getItem(key)
   if (existing) return existing
   const id = `c_${Math.random().toString(36).slice(2, 10)}`
