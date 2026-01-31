@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { ReactFlowProvider } from 'reactflow'
 import { Canvas } from './Canvas'
 import { Legend } from './components/Legend'
@@ -16,6 +16,16 @@ type CapturedError = {
     source?: string
 }
 
+function getMapKey(): string {
+    const url = new URL(window.location.href)
+    return url.searchParams.get('map') || 'default'
+}
+
+function apiBase(): string {
+    // Optional override for local dev
+    return (localStorage.getItem('taskmap-api-base') || '').trim()
+}
+
 const AppInner: React.FC = () => {
     const createTask = useAppStore((s) => s.createTask)
     const rootIds = useAppStore((s) => s.rootTaskIds)
@@ -23,9 +33,12 @@ const AppInner: React.FC = () => {
     const [sidebarOpen, setSidebarOpen] = useState(false)
     const [sidebarPinned, setSidebarPinned] = useState(false)
     const { collab } = useCollabContext()
+    const mapKey = useMemo(() => getMapKey(), [])
     const mobileSheetTaskId = useAppStore((s) => s.mobileSheetTaskId)
     const tasksCount = Object.keys(useAppStore((s) => s.tasks)).length
     const prevTasksCountRef = React.useRef<number>(tasksCount)
+    const recoverInFlightRef = React.useRef(false)
+    const lastRecoverAtRef = React.useRef(0)
     const [showOffline, setShowOffline] = useState(false)
     const offlineTimerRef = React.useRef<number | null>(null)
     const [lastErr, setLastErr] = useState<CapturedError | null>(() => {
@@ -84,7 +97,7 @@ const AppInner: React.FC = () => {
         }
     }, [])
 
-    // If tasks suddenly drop to 0 (without a reload), treat as an anomaly and surface it.
+    // If tasks suddenly drop to 0 (without a reload), treat as an anomaly and attempt recovery.
     useEffect(() => {
         const prev = prevTasksCountRef.current
         prevTasksCountRef.current = tasksCount
@@ -99,6 +112,30 @@ const AppInner: React.FC = () => {
             const e: CapturedError = { at: Date.now(), message: msg, stack }
             setLastErr(e)
             try { localStorage.setItem('taskmap-last-error', JSON.stringify(e)) } catch {}
+
+            // Best-effort recovery: refetch server snapshot if connected.
+            if (collab.connected && !recoverInFlightRef.current) {
+                const now = Date.now()
+                if (now - lastRecoverAtRef.current < 5000) return
+                lastRecoverAtRef.current = now
+                recoverInFlightRef.current = true
+                ;(async () => {
+                    try {
+                        const base = apiBase()
+                        const res = await fetch(`${base}/api/maps/${encodeURIComponent(mapKey)}`, { credentials: 'include' })
+                        if (!res.ok) return
+                        const data = await res.json()
+                        const remote = data?.graph
+                        const count = Object.keys(remote?.tasks || {}).length
+                        if (count > 0) {
+                            useAppStore.getState().setGraph(remote)
+                        }
+                    } catch { }
+                    finally {
+                        recoverInFlightRef.current = false
+                    }
+                })()
+            }
         }
     }, [tasksCount, collab.connected, collab.peers.length, collab.rev])
 

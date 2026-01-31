@@ -362,7 +362,28 @@ export const useAppStore = create<AppState>()(
                 })
             },
         }),
-        { name: 'task-map-store' }
+        {
+            name: 'task-map-store',
+            version: 2,
+            // Persist only UI state to avoid stale graphs overwriting server sync.
+            partialize: (state) => ({
+                uiExpanded: state.uiExpanded,
+                focusTaskId: state.focusTaskId,
+                mobileSheetTaskId: state.mobileSheetTaskId,
+                mobileMoveMode: state.mobileMoveMode,
+                mobileHoldDragId: state.mobileHoldDragId,
+            }),
+            migrate: (persistedState: unknown, _version: number) => {
+                const s = (persistedState as any) || {}
+                return {
+                    uiExpanded: (s.uiExpanded ?? {}) as Record<TaskId, boolean>,
+                    focusTaskId: (s.focusTaskId ?? null) as TaskId | null,
+                    mobileSheetTaskId: (s.mobileSheetTaskId ?? null) as TaskId | null,
+                    mobileMoveMode: !!s.mobileMoveMode,
+                    mobileHoldDragId: (s.mobileHoldDragId ?? null) as TaskId | null,
+                }
+            },
+        }
     )
 )
 

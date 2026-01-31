@@ -24,6 +24,7 @@ type ServerMapState = {
   peers: Map<string, PeerPresence>
   sockets: Map<string, Set<any>> // clientId -> sockets
   lastPersistError: { at: number; message: string } | null
+  lastDbRefreshAt: number
 }
 
 const MAPS = new Map<string, ServerMapState>() // key: mapKey (slug)
@@ -220,9 +221,30 @@ async function loadLatestSnapshot(mapId: string): Promise<{ rev: number; graph: 
 function getOrInitMapState(mapKey: string): ServerMapState {
   let st = MAPS.get(mapKey)
   if (!st) {
-    st = { rev: 0, graph: DEFAULT_GRAPH, peers: new Map(), sockets: new Map(), lastPersistError: null }
+    st = { rev: 0, graph: DEFAULT_GRAPH, peers: new Map(), sockets: new Map(), lastPersistError: null, lastDbRefreshAt: 0 }
     MAPS.set(mapKey, st)
   }
+  return st
+}
+
+async function refreshFromDbIfNewer(mapKey: string, mapId: string, force = false): Promise<ServerMapState> {
+  const st = getOrInitMapState(mapKey)
+  const now = Date.now()
+  if (!force && st.lastDbRefreshAt && now - st.lastDbRefreshAt < 2000) return st
+  st.lastDbRefreshAt = now
+
+  const latest = await loadLatestSnapshot(mapId)
+  if (!latest) return st
+
+  const latestRev = Number(latest.rev ?? 0)
+  const latestTasks = Object.keys(latest.graph?.tasks || {}).length
+  const curTasks = Object.keys(st.graph?.tasks || {}).length
+
+  if (latestRev > st.rev || (curTasks === 0 && latestTasks > 0)) {
+    st.rev = latestRev
+    st.graph = sanitizeGraph(latest.graph)
+  }
+
   return st
 }
 
@@ -249,34 +271,17 @@ export async function collabRoutes(app: FastifyInstance) {
     const mapKey = (req.params as any).mapKey as string
     const { mapId } = await ensureSystemMap(mapKey)
 
-    const st = getOrInitMapState(mapKey)
-    // lazy-load from DB once per process
-    if (st.rev === 0 && st.graph === DEFAULT_GRAPH) {
-      const latest = await loadLatestSnapshot(mapId)
-      if (latest) {
-        st.rev = latest.rev
-      // Snapshot graphs may contain broken parent/children/position fields from past bugs.
-      // Sanitize on load so new clients don't receive a graph that makes the canvas invisible.
-      st.graph = sanitizeGraph(latest.graph)
-      }
-    }
-  // Always serve a sanitized graph to clients.
-  return reply.send({ ok: true, rev: st.rev, graph: sanitizeGraph(st.graph), lastPersistError: st.lastPersistError })
+    const st0 = getOrInitMapState(mapKey)
+    const st = await refreshFromDbIfNewer(mapKey, mapId, st0.rev === 0 && st0.graph === DEFAULT_GRAPH)
+    // Always serve a sanitized graph to clients.
+    return reply.send({ ok: true, rev: st.rev, graph: sanitizeGraph(st.graph), lastPersistError: st.lastPersistError })
   })
 
   // POST save graph (for beforeunload/pagehide keepalive flush)
   app.post('/api/maps/:mapKey/state', async (req, reply) => {
     const mapKey = (req.params as any).mapKey as string
     const { mapId } = await ensureSystemMap(mapKey)
-    const st = getOrInitMapState(mapKey)
-    // lazy-load from DB once per process
-    if (st.rev === 0 && st.graph === DEFAULT_GRAPH) {
-      const latest = await loadLatestSnapshot(mapId)
-      if (latest) {
-        st.rev = latest.rev
-        st.graph = sanitizeGraph(latest.graph)
-      }
-    }
+    const st = await refreshFromDbIfNewer(mapKey, mapId, false)
 
     const body = (req.body as any) || {}
     const incomingRev = Number(body.rev ?? -1)
@@ -346,14 +351,7 @@ export async function collabRoutes(app: FastifyInstance) {
       }
 
       const { mapId } = await ensureSystemMap(mapKey)
-      const st = getOrInitMapState(mapKey)
-      if (st.rev === 0 && st.graph === DEFAULT_GRAPH) {
-        const latest = await loadLatestSnapshot(mapId)
-        if (latest) {
-          st.rev = latest.rev
-          st.graph = sanitizeGraph(latest.graph)
-        }
-      }
+      const st = await refreshFromDbIfNewer(mapKey, mapId, false)
 
       // register socket
       const set = st.sockets.get(clientId) ?? new Set<any>()
@@ -404,6 +402,9 @@ export async function collabRoutes(app: FastifyInstance) {
           const graph = msg.graph as Graph
           const deletedTaskIds = Array.isArray(msg.deletedTaskIds) ? (msg.deletedTaskIds as string[]) : []
           if (!graph?.tasks || !graph?.users || !Array.isArray(graph?.rootTaskIds)) return
+
+          // Refresh from DB to avoid stale in-memory state on multi-instance setups.
+          await refreshFromDbIfNewer(mapKey, mapId, false)
 
           // Avoid accepting stale full-state that can rollback newer changes.
           if (Number.isFinite(incomingRev) && incomingRev < st.rev) {

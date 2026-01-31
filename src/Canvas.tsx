@@ -53,6 +53,8 @@ export const Canvas: React.FC = () => {
     const nodesLenRef = useRef<number>(0)
     const lastRecoverAtRef = useRef<number>(0)
     const recoverCountRef = useRef<number>(0)
+    const prevTasksCountRef = useRef<number>(0)
+    const tasksCount = Object.keys(graph.tasks || {}).length
 
 
     const snapshotGraph = () => {
@@ -87,6 +89,20 @@ export const Canvas: React.FC = () => {
             }, 80)
         }
     }, [collab.connected])
+
+    // Initial graph load: auto-fit once when tasks appear.
+    useEffect(() => {
+        const prev = prevTasksCountRef.current
+        prevTasksCountRef.current = tasksCount
+        if (prev === 0 && tasksCount > 0) {
+            const now = Date.now()
+            if (now - lastAutoFitAtRef.current < 2000) return
+            lastAutoFitAtRef.current = now
+            window.setTimeout(() => {
+                try { rf.fitView({ padding: 0.2, duration: 250 } as any) } catch { }
+            }, 80)
+        }
+    }, [tasksCount])
 
     const isVisible = (id: string): boolean => {
         let cur = graph.tasks[id]
