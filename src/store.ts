@@ -150,10 +150,10 @@ export const useAppStore = create<AppState>()(
                 })
             },
             createTask: (input?: CreateTaskInput) => {
-                const now = Date.now()
                 const id = generateId('t')
                 const parentId = input?.parentId ?? null
                 const parent = parentId ? get().tasks[parentId] : undefined
+                const now = Date.now()
                 const task: Task = {
                     id,
                     title: input?.title ?? '新しいタスク',
@@ -172,8 +172,7 @@ export const useAppStore = create<AppState>()(
                     const rootTaskIds = [...s.rootTaskIds]
                     if (parentId) {
                         const p = tasks[parentId]
-                        // parent structure changed -> touch updatedAt too
-                        tasks[parentId] = { ...p, children: [...p.children, id], updatedAt: now }
+                        p.children = [...p.children, id]
                     } else {
                         rootTaskIds.push(id)
                     }
@@ -186,11 +185,13 @@ export const useAppStore = create<AppState>()(
                 set((s) => {
                     const t = s.tasks[taskId]
                     if (!t) return {}
+                    const now = Date.now()
                     const updated: Task = {
                         ...t,
                         ...patch,
                         deadline: patch.deadline ? { ...t.deadline, ...patch.deadline } : t.deadline,
-                        updatedAt: Date.now(),
+                        // Local updates always advance updatedAt (server/client conflict resolution uses this)
+                        updatedAt: now,
                     }
                     return { tasks: { ...s.tasks, [taskId]: updated } }
                 })
@@ -206,8 +207,8 @@ export const useAppStore = create<AppState>()(
             },
             setPositions: (updates) => {
                 set((s) => {
-                    const now = Date.now()
                     const tasks = { ...s.tasks }
+                    const now = Date.now()
                     Object.entries(updates).forEach(([id, pos]) => {
                         const t = tasks[id]
                         if (t) tasks[id] = { ...t, position: { x: pos.x, y: pos.y }, updatedAt: now }
@@ -237,7 +238,6 @@ export const useAppStore = create<AppState>()(
             },
             toggleExpand: (taskId) => {
                 set((s) => {
-                    const now = Date.now()
                     const t = s.tasks[taskId]
                     if (!t) return {}
                     const curExpanded = s.uiExpanded[taskId] !== false
@@ -247,6 +247,7 @@ export const useAppStore = create<AppState>()(
                     if (nextExpanded && t.children.length > 0) {
                         const n = t.children.length
                         const radius = 140
+                        const now = Date.now()
                         t.children.forEach((cid, idx) => {
                             const child = tasks[cid]
                             if (!child) return
@@ -272,11 +273,11 @@ export const useAppStore = create<AppState>()(
             },
             moveSubtree: (taskId, toX, toY) => {
                 set((s) => {
-                    const now = Date.now()
                     const target = s.tasks[taskId]
                     if (!target) return {}
                     const dx = toX - (target.position?.x ?? 0)
                     const dy = toY - (target.position?.y ?? 0)
+                    const now = Date.now()
                     const collect = (id: TaskId, acc: TaskId[] = []): TaskId[] => {
                         const t = s.tasks[id]
                         if (!t) return acc
@@ -319,8 +320,8 @@ export const useAppStore = create<AppState>()(
                 const s0 = get() as any
                 const offsets = s0._dragOffsets as Record<TaskId, { x: number; y: number }> | undefined
                 set((s) => {
-                    const now = Date.now()
                     const tasks = { ...s.tasks }
+                    const now = Date.now()
                     const root = tasks[rootId]
                     if (root) tasks[rootId] = { ...root, position: { x: toX, y: toY }, updatedAt: now }
                     if (offsets) {
@@ -340,10 +341,10 @@ export const useAppStore = create<AppState>()(
             },
             gatherAll: () => {
                 set((s) => {
-                    const now = Date.now()
                     const tasks = { ...s.tasks }
                     const spacing = 140
                     let i = 0
+                    const now = Date.now()
                     Object.keys(tasks).forEach((id) => {
                         const t = tasks[id]
                         const x = (i % 6) * spacing

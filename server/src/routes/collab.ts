@@ -44,10 +44,6 @@ function finiteNumber(v: any, fallback = 0): number {
   return Number.isFinite(n) ? n : fallback
 }
 
-function taskUpdatedAt(t: any): number {
-  return finiteNumber(t?.updatedAt, 0)
-}
-
 function clamp(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, n))
 }
@@ -90,13 +86,14 @@ function sanitizeGraph(g: Graph): Graph {
       ...t,
       id: typeof t.id === 'string' && t.id.length > 0 ? t.id : id,
       title: typeof t.title === 'string' ? t.title : '',
-      updatedAt: finiteNumber(t.updatedAt, 0),
       parentId,
       // children is rebuilt below
       children: [],
       dependsOn: Array.isArray(t.dependsOn) ? uniqStrings(t.dependsOn) : [],
       // `expanded` is UI-only; ignore incoming to avoid hiding nodes across clients.
       expanded: undefined,
+      // Conflict resolution uses this. Default to 0 for legacy snapshots.
+      updatedAt: finiteNumber((t as any).updatedAt, 0),
       position,
     }
   }
@@ -140,14 +137,15 @@ function mergeGraph(prev: Graph, incoming: Graph): Graph {
   const n = normalizeGraph(incoming)
   const now = Date.now()
   const tasks: Record<string, any> = { ...(p.tasks || {}) }
-  // Conflict resolution:
+
+  // Conflict resolution (prevents rollback):
   // - Prefer the task with newer `updatedAt`
-  // - If incoming has no updatedAt (legacy client) and prev has updatedAt, ignore incoming
-  // - If both lack updatedAt, accept incoming and stamp server-time updatedAt so legacy clients don't keep overriding
+  // - If incoming has no updatedAt (legacy client/snapshot) and prev has updatedAt, ignore incoming
+  // - If both lack updatedAt, accept incoming but stamp server-time updatedAt so it becomes stable
   for (const [id, it] of Object.entries(n.tasks || {})) {
     const prevTask = (tasks as any)[id]
-    const prevTs = taskUpdatedAt(prevTask)
-    const incTs = taskUpdatedAt(it)
+    const prevTs = finiteNumber((prevTask as any)?.updatedAt, 0)
+    const incTs = finiteNumber((it as any)?.updatedAt, 0)
     if (!prevTask) {
       ;(tasks as any)[id] = incTs > 0 ? it : { ...(it as any), updatedAt: now }
       continue
@@ -313,6 +311,7 @@ export async function collabRoutes(app: FastifyInstance) {
     const st = await refreshFromDbIfNewer(mapKey, mapId, false)
 
     const body = (req.body as any) || {}
+    const incomingRev = Number(body.rev ?? -1)
     const graph = body.graph as Graph
     const deletedTaskIds = Array.isArray(body.deletedTaskIds) ? (body.deletedTaskIds as string[]) : []
     const clientId = typeof body.clientId === 'string' ? body.clientId : undefined
@@ -320,8 +319,12 @@ export async function collabRoutes(app: FastifyInstance) {
       return reply.status(400).send({ ok: false, error: 'invalid_graph' })
     }
 
-    // Always merge; per-task updatedAt prevents stale clients from rolling back newer changes.
-    st.rev = st.rev + 1
+    // Avoid accepting stale full-state that can rollback newer changes.
+    if (Number.isFinite(incomingRev) && incomingRev < st.rev) {
+      return reply.send({ ok: true, accepted: false, rev: st.rev })
+    }
+    // Advance rev safely even if client claims a higher number.
+    st.rev = Math.max(st.rev, Number.isFinite(incomingRev) ? incomingRev : st.rev) + 1
     st.graph = applyDeletions(mergeGraph(st.graph, graph), deletedTaskIds)
 
     try {
@@ -422,6 +425,7 @@ export async function collabRoutes(app: FastifyInstance) {
         }
 
         if (msg?.type === 'state') {
+          const incomingRev = Number(msg.rev ?? -1)
           const graph = msg.graph as Graph
           const deletedTaskIds = Array.isArray(msg.deletedTaskIds) ? (msg.deletedTaskIds as string[]) : []
           if (!graph?.tasks || !graph?.users || !Array.isArray(graph?.rootTaskIds)) return
@@ -429,8 +433,15 @@ export async function collabRoutes(app: FastifyInstance) {
           // Refresh from DB to avoid stale in-memory state on multi-instance setups.
           await refreshFromDbIfNewer(mapKey, mapId, false)
 
-          // Always merge; per-task updatedAt prevents stale clients from rolling back newer changes.
-          st.rev = st.rev + 1
+          // Avoid accepting stale full-state that can rollback newer changes.
+          if (Number.isFinite(incomingRev) && incomingRev < st.rev) {
+            // Force the sender to resync (prevents "stuck edits" while keeping server authoritative).
+            wsSend(ws, { type: 'state', rev: st.rev, graph: st.graph, from: 'server' })
+            return
+          }
+
+          // Advance rev safely even if client claims a higher number.
+          st.rev = Math.max(st.rev, Number.isFinite(incomingRev) ? incomingRev : st.rev) + 1
           // Merge instead of replace to avoid wiping others' tasks when a stale/empty graph arrives.
           st.graph = applyDeletions(mergeGraph(st.graph, graph), deletedTaskIds)
 

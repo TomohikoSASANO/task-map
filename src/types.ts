@@ -14,8 +14,8 @@ export type Task = {
     children: TaskId[]
     dependsOn: TaskId[]
     position: { x: number; y: number }
-    // Updated timestamp for conflict resolution (ms since epoch).
-    updatedAt?: number
+    // Used for conflict resolution across clients. Newer updates should win.
+    updatedAt: number
     expanded?: boolean
     done?: boolean
     memo?: string
