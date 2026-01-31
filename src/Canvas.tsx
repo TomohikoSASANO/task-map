@@ -83,10 +83,13 @@ export const Canvas: React.FC = () => {
             const nowTs = Date.now()
             if (nowTs - lastAutoFitAtRef.current < 5000) return
             lastAutoFitAtRef.current = nowTs
-            // give ReactFlow a tick to apply the latest nodes
+            // Give ReactFlow time to mount/measure nodes; do 2 passes to be robust.
             window.setTimeout(() => {
                 try { rf.fitView({ padding: 0.2, duration: 250 } as any) } catch { }
-            }, 80)
+            }, 150)
+            window.setTimeout(() => {
+                try { rf.fitView({ padding: 0.2, duration: 250 } as any) } catch { }
+            }, 650)
         }
     }, [collab.connected])
 
@@ -98,9 +101,13 @@ export const Canvas: React.FC = () => {
             const now = Date.now()
             if (now - lastAutoFitAtRef.current < 2000) return
             lastAutoFitAtRef.current = now
+            // Same: 2 passes so nodes are measured before fitting.
             window.setTimeout(() => {
                 try { rf.fitView({ padding: 0.2, duration: 250 } as any) } catch { }
-            }, 80)
+            }, 150)
+            window.setTimeout(() => {
+                try { rf.fitView({ padding: 0.2, duration: 250 } as any) } catch { }
+            }, 650)
         }
     }, [tasksCount])
 
@@ -622,8 +629,13 @@ export const Canvas: React.FC = () => {
                     sendPresence({ selectedIds: selectedIdsRef.current })
                 }}
                 onInit={(_) => {
-                    // 初期表示時のみ軽くフィット。内部ノードは制御しない。
-                    try { rf.fitView({ padding: 0.2 }) } catch { }
+                    // 初期表示時: ノード計測前だと空に見えることがあるので遅延して2回フィット
+                    window.setTimeout(() => {
+                        try { rf.fitView({ padding: 0.2, duration: 200 } as any) } catch { }
+                    }, 120)
+                    window.setTimeout(() => {
+                        try { rf.fitView({ padding: 0.2, duration: 200 } as any) } catch { }
+                    }, 600)
                     try {
                         const vp = (rf as any).toObject?.().viewport || (rf as any).getViewport?.()
                         if (vp) viewportRef.current = vp
