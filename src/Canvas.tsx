@@ -81,7 +81,27 @@ export const Canvas: React.FC = () => {
             // Only fit after ReactFlow init + nodes exist (measured).
             if (!rfReadyRef.current) return
             if ((nodesLenRef.current ?? 0) <= 0) return
-            try { rf.fitView({ padding: 0.2, duration: 250 } as any) } catch { }
+            // Keep user's current zoom; only pan to the content center.
+            try {
+                const rfNodes = rf.getNodes()
+                if (!rfNodes || rfNodes.length === 0) return
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+                for (const n of rfNodes) {
+                    const x = n.position?.x ?? 0
+                    const y = n.position?.y ?? 0
+                    const w = n.width ?? 160
+                    const h = n.height ?? 64
+                    minX = Math.min(minX, x)
+                    minY = Math.min(minY, y)
+                    maxX = Math.max(maxX, x + w)
+                    maxY = Math.max(maxY, y + h)
+                }
+                if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) return
+                const cx = (minX + maxX) / 2
+                const cy = (minY + maxY) / 2
+                const currentZoom = viewportRef.current.zoom
+                rf.setCenter(cx, cy, { zoom: currentZoom, duration: 250 } as any)
+            } catch { }
         }
         // Multi-pass: nodes are sometimes measured a tick later.
         window.setTimeout(run, 180)
@@ -648,6 +668,8 @@ export const Canvas: React.FC = () => {
                     } catch { }
                 }}
                 onNodeDrag={(_, node) => {
+                    // ReactFlow may call onNodeDrag while the dragged node was replaced/removed by remote sync.
+                    if (!node || !node.position || typeof node.position.x !== 'number' || typeof node.position.y !== 'number') return
                     const selection = dragRef.current?.selection
                     const offsets = dragRef.current?.offsets
                     if (selection && offsets && selection.length > 0) {
@@ -679,8 +701,9 @@ export const Canvas: React.FC = () => {
                         if (n.id === meId) continue
                         const w = n.width ?? 160
                         const h = n.height ?? 64
-                        const left = n.position.x
-                        const top = n.position.y
+                        // Defensive: some nodes can be transiently missing position during internal updates.
+                        const left = n.position?.x ?? 0
+                        const top = n.position?.y ?? 0
                         const right = left + w
                         const bottom = top + h
                         if (meCenterX >= left && meCenterX <= right && meCenterY >= top && meCenterY <= bottom) { hit = n.id; break }
