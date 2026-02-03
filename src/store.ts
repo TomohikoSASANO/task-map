@@ -3,8 +3,50 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { CreateTaskInput, Graph, Task, TaskId, User, UserId } from './types'
 
+const CLIENT_ID_KEY = 'taskmap-client-id'
+const CLOCK_KEY = 'taskmap-clock'
+
 function generateId(prefix: string): string {
     return `${prefix}_${Math.random().toString(36).slice(2, 9)}`
+}
+
+function ensureClientId(): string {
+    try {
+        const existing = localStorage.getItem(CLIENT_ID_KEY)
+        if (existing) return existing
+        const id = `c_${Math.random().toString(36).slice(2, 10)}`
+        localStorage.setItem(CLIENT_ID_KEY, id)
+        return id
+    } catch {
+        return `c_${Math.random().toString(36).slice(2, 10)}`
+    }
+}
+
+function ensureLocalClockAtLeast(min: number) {
+    try {
+        const raw = localStorage.getItem(CLOCK_KEY)
+        const cur = raw ? Number(raw) : 0
+        const curN = Number.isFinite(cur) ? cur : 0
+        if (curN < min) localStorage.setItem(CLOCK_KEY, String(min))
+    } catch { }
+}
+
+function nextClock(): number {
+    try {
+        const raw = localStorage.getItem(CLOCK_KEY)
+        const cur = raw ? Number(raw) : 0
+        const curN = Number.isFinite(cur) && cur >= 0 ? cur : 0
+        const next = Math.floor(curN) + 1
+        localStorage.setItem(CLOCK_KEY, String(next))
+        return next
+    } catch {
+        // Fallback only (should be rare). This may be non-monotonic across tabs, but avoids crashes.
+        return Date.now()
+    }
+}
+
+function nextMeta(): { updatedAt: number; updatedBy: string } {
+    return { updatedAt: nextClock(), updatedBy: ensureClientId() }
 }
 
 export type Derived = {
@@ -153,7 +195,7 @@ export const useAppStore = create<AppState>()(
                 const id = generateId('t')
                 const parentId = input?.parentId ?? null
                 const parent = parentId ? get().tasks[parentId] : undefined
-                const now = Date.now()
+                const meta = nextMeta()
                 const task: Task = {
                     id,
                     title: input?.title ?? '新しいタスク',
@@ -165,14 +207,15 @@ export const useAppStore = create<AppState>()(
                     children: [],
                     dependsOn: [],
                     position: { x: 0, y: 0 },
-                    updatedAt: now,
+                    updatedAt: meta.updatedAt,
+                    updatedBy: meta.updatedBy,
                 }
                 set((s) => {
                     const tasks = { ...s.tasks, [id]: task }
                     const rootTaskIds = [...s.rootTaskIds]
                     if (parentId) {
                         const p = tasks[parentId]
-                        p.children = [...p.children, id]
+                        tasks[parentId] = { ...p, children: [...p.children, id], updatedAt: meta.updatedAt, updatedBy: meta.updatedBy }
                     } else {
                         rootTaskIds.push(id)
                     }
@@ -185,13 +228,14 @@ export const useAppStore = create<AppState>()(
                 set((s) => {
                     const t = s.tasks[taskId]
                     if (!t) return {}
-                    const now = Date.now()
+                    const meta = nextMeta()
                     const updated: Task = {
                         ...t,
                         ...patch,
                         deadline: patch.deadline ? { ...t.deadline, ...patch.deadline } : t.deadline,
-                        // Local updates always advance updatedAt (server/client conflict resolution uses this)
-                        updatedAt: now,
+                        // Local updates always advance version metadata.
+                        updatedAt: meta.updatedAt,
+                        updatedBy: meta.updatedBy,
                     }
                     return { tasks: { ...s.tasks, [taskId]: updated } }
                 })
@@ -201,17 +245,18 @@ export const useAppStore = create<AppState>()(
                 set((s) => {
                     const t = s.tasks[taskId]
                     if (!t) return {}
-                    const updated: Task = { ...t, position: { x, y }, updatedAt: Date.now() }
+                    const meta = nextMeta()
+                    const updated: Task = { ...t, position: { x, y }, updatedAt: meta.updatedAt, updatedBy: meta.updatedBy }
                     return { tasks: { ...s.tasks, [taskId]: updated } }
                 })
             },
             setPositions: (updates) => {
                 set((s) => {
                     const tasks = { ...s.tasks }
-                    const now = Date.now()
+                    const meta = nextMeta()
                     Object.entries(updates).forEach(([id, pos]) => {
                         const t = tasks[id]
-                        if (t) tasks[id] = { ...t, position: { x: pos.x, y: pos.y }, updatedAt: now }
+                        if (t) tasks[id] = { ...t, position: { x: pos.x, y: pos.y }, updatedAt: meta.updatedAt, updatedBy: meta.updatedBy }
                     })
                     return { tasks }
                 })
@@ -222,7 +267,8 @@ export const useAppStore = create<AppState>()(
                     const after = s.tasks[afterId]
                     if (!after) return {}
                     if (!after.dependsOn.includes(beforeId)) {
-                        const updated: Task = { ...after, dependsOn: [...after.dependsOn, beforeId], updatedAt: Date.now() }
+                        const meta = nextMeta()
+                        const updated: Task = { ...after, dependsOn: [...after.dependsOn, beforeId], updatedAt: meta.updatedAt, updatedBy: meta.updatedBy }
                         return { tasks: { ...s.tasks, [afterId]: updated } }
                     }
                     return {}
@@ -232,7 +278,8 @@ export const useAppStore = create<AppState>()(
                 set((s) => {
                     const after = s.tasks[afterId]
                     if (!after) return {}
-                    const updated: Task = { ...after, dependsOn: after.dependsOn.filter((id) => id !== beforeId), updatedAt: Date.now() }
+                    const meta = nextMeta()
+                    const updated: Task = { ...after, dependsOn: after.dependsOn.filter((id) => id !== beforeId), updatedAt: meta.updatedAt, updatedBy: meta.updatedBy }
                     return { tasks: { ...s.tasks, [afterId]: updated } }
                 })
             },
@@ -247,7 +294,7 @@ export const useAppStore = create<AppState>()(
                     if (nextExpanded && t.children.length > 0) {
                         const n = t.children.length
                         const radius = 140
-                        const now = Date.now()
+                        const meta = nextMeta()
                         t.children.forEach((cid, idx) => {
                             const child = tasks[cid]
                             if (!child) return
@@ -260,7 +307,8 @@ export const useAppStore = create<AppState>()(
                                         x: (t.position?.x ?? 0) + Math.cos(angle) * radius,
                                         y: (t.position?.y ?? 0) + Math.sin(angle) * radius,
                                     },
-                                    updatedAt: now,
+                                    updatedAt: meta.updatedAt,
+                                    updatedBy: meta.updatedBy,
                                 }
                             }
                         })
@@ -277,7 +325,7 @@ export const useAppStore = create<AppState>()(
                     if (!target) return {}
                     const dx = toX - (target.position?.x ?? 0)
                     const dy = toY - (target.position?.y ?? 0)
-                    const now = Date.now()
+                    const meta = nextMeta()
                     const collect = (id: TaskId, acc: TaskId[] = []): TaskId[] => {
                         const t = s.tasks[id]
                         if (!t) return acc
@@ -291,7 +339,7 @@ export const useAppStore = create<AppState>()(
                         const t = tasks[id]
                         const cx = t.position?.x ?? 0
                         const cy = t.position?.y ?? 0
-                        tasks[id] = { ...t, position: { x: cx + dx, y: cy + dy }, updatedAt: now }
+                        tasks[id] = { ...t, position: { x: cx + dx, y: cy + dy }, updatedAt: meta.updatedAt, updatedBy: meta.updatedBy }
                     })
                     return { tasks }
                 })
@@ -321,14 +369,14 @@ export const useAppStore = create<AppState>()(
                 const offsets = s0._dragOffsets as Record<TaskId, { x: number; y: number }> | undefined
                 set((s) => {
                     const tasks = { ...s.tasks }
-                    const now = Date.now()
+                    const meta = nextMeta()
                     const root = tasks[rootId]
-                    if (root) tasks[rootId] = { ...root, position: { x: toX, y: toY }, updatedAt: now }
+                    if (root) tasks[rootId] = { ...root, position: { x: toX, y: toY }, updatedAt: meta.updatedAt, updatedBy: meta.updatedBy }
                     if (offsets) {
                         Object.entries(offsets).forEach(([id, off]) => {
                             const t = tasks[id]
                             if (!t) return
-                            tasks[id] = { ...t, position: { x: toX + off.x, y: toY + off.y }, updatedAt: now }
+                            tasks[id] = { ...t, position: { x: toX + off.x, y: toY + off.y }, updatedAt: meta.updatedAt, updatedBy: meta.updatedBy }
                         })
                     }
                     return { tasks }
@@ -344,12 +392,12 @@ export const useAppStore = create<AppState>()(
                     const tasks = { ...s.tasks }
                     const spacing = 140
                     let i = 0
-                    const now = Date.now()
+                    const meta = nextMeta()
                     Object.keys(tasks).forEach((id) => {
                         const t = tasks[id]
                         const x = (i % 6) * spacing
                         const y = Math.floor(i / 6) * spacing
-                        tasks[id] = { ...t, position: { x, y }, updatedAt: now }
+                        tasks[id] = { ...t, position: { x, y }, updatedAt: meta.updatedAt, updatedBy: meta.updatedBy }
                         i++
                     })
                     // Collapse all tasks in UI.
@@ -363,13 +411,23 @@ export const useAppStore = create<AppState>()(
             setGraph: (next) => {
                 set((s) => {
                     const nextTasks = next.tasks
+                    // Normalize incoming tasks (legacy snapshots may not include version metadata).
+                    const normalizedTasks: any = {}
+                    let maxClock = 0
+                    for (const [id, t] of Object.entries(nextTasks as any)) {
+                        const at = typeof (t as any)?.updatedAt === 'number' && Number.isFinite((t as any).updatedAt) ? (t as any).updatedAt : 0
+                        const by = typeof (t as any)?.updatedBy === 'string' ? (t as any).updatedBy : ''
+                        normalizedTasks[id] = { ...(t as any), updatedAt: at, updatedBy: by }
+                        if (at > maxClock) maxClock = at
+                    }
+                    ensureLocalClockAtLeast(maxClock)
                     const nextUi: Record<TaskId, boolean> = {}
                     for (const [id, v] of Object.entries(s.uiExpanded || {})) {
                         if (Object.prototype.hasOwnProperty.call(nextTasks, id) && typeof v === 'boolean') {
                             nextUi[id] = v as boolean
                         }
                     }
-                    return { tasks: next.tasks, users: next.users, rootTaskIds: next.rootTaskIds, uiExpanded: nextUi }
+                    return { tasks: normalizedTasks, users: next.users, rootTaskIds: next.rootTaskIds, uiExpanded: nextUi }
                 })
             },
         }),

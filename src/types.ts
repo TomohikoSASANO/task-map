@@ -14,8 +14,11 @@ export type Task = {
     children: TaskId[]
     dependsOn: TaskId[]
     position: { x: number; y: number }
-    // Used for conflict resolution across clients. Newer updates should win.
+    // Used for conflict resolution across clients.
+    // This is a logical clock (monotonic counter), not wall time.
     updatedAt: number
+    // Tie-breaker when updatedAt is equal.
+    updatedBy: string
     expanded?: boolean
     done?: boolean
     memo?: string

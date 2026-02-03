@@ -69,6 +69,7 @@ function sanitizeGraph(g: Graph): Graph {
   const tasks: Record<string, any> = {}
   // Avoid extreme coordinates that can make ReactFlow appear blank due to precision/viewport issues.
   const POS_LIMIT = 100000
+  const LEGACY_TS_THRESHOLD = 1_000_000_000_000 // treat epoch-ms as legacy (we use logical clock now)
 
   // First pass: copy + coerce fields we rely on.
   for (const id of Object.keys(rawTasks)) {
@@ -92,8 +93,15 @@ function sanitizeGraph(g: Graph): Graph {
       dependsOn: Array.isArray(t.dependsOn) ? uniqStrings(t.dependsOn) : [],
       // `expanded` is UI-only; ignore incoming to avoid hiding nodes across clients.
       expanded: undefined,
-      // Conflict resolution uses this. Default to 0 for legacy snapshots.
-      updatedAt: finiteNumber((t as any).updatedAt, 0),
+      // Conflict resolution uses (updatedAt, updatedBy).
+      // updatedAt is a logical clock; older snapshots might store epoch-ms -> normalize to 0.
+      updatedAt: (() => {
+        const ua = finiteNumber((t as any).updatedAt, 0)
+        if (ua >= LEGACY_TS_THRESHOLD) return 0
+        if (ua < 0) return 0
+        return ua
+      })(),
+      updatedBy: typeof (t as any).updatedBy === 'string' ? String((t as any).updatedBy) : '',
       position,
     }
   }
@@ -135,29 +143,38 @@ function sanitizeGraph(g: Graph): Graph {
 function mergeGraph(prev: Graph, incoming: Graph): Graph {
   const p = normalizeGraph(prev)
   const n = normalizeGraph(incoming)
-  const now = Date.now()
+  // Use a monotonic stamp for legacy tasks (no version info). Must NOT be wall time.
+  const stamp = finiteNumber((incoming as any).__stamp, 0)
   const tasks: Record<string, any> = { ...(p.tasks || {}) }
 
   // Conflict resolution (prevents rollback):
-  // - Prefer the task with newer `updatedAt`
-  // - If incoming has no updatedAt (legacy client/snapshot) and prev has updatedAt, ignore incoming
-  // - If both lack updatedAt, accept incoming but stamp server-time updatedAt so it becomes stable
+  // - Prefer the task with newer (updatedAt, updatedBy)
+  // - If incoming has updatedAt==0 and prev has >0, ignore incoming (legacy cannot overwrite)
+  // - If both have 0, accept incoming but stamp with server monotonic `stamp`
   for (const [id, it] of Object.entries(n.tasks || {})) {
     const prevTask = (tasks as any)[id]
     const prevTs = finiteNumber((prevTask as any)?.updatedAt, 0)
     const incTs = finiteNumber((it as any)?.updatedAt, 0)
+    const prevBy = typeof (prevTask as any)?.updatedBy === 'string' ? String((prevTask as any).updatedBy) : ''
+    const incBy = typeof (it as any)?.updatedBy === 'string' ? String((it as any).updatedBy) : ''
     if (!prevTask) {
-      ;(tasks as any)[id] = incTs > 0 ? it : { ...(it as any), updatedAt: now }
+      ;(tasks as any)[id] = incTs > 0 ? it : { ...(it as any), updatedAt: stamp, updatedBy: 'server' }
       continue
     }
     if (incTs === 0 && prevTs > 0) {
       continue
     }
     if (prevTs === 0 && incTs === 0) {
-      ;(tasks as any)[id] = { ...(it as any), updatedAt: now }
+      ;(tasks as any)[id] = { ...(it as any), updatedAt: stamp, updatedBy: 'server' }
       continue
     }
-    if (incTs >= prevTs) {
+    if (incTs > prevTs) {
+      ;(tasks as any)[id] = it
+      continue
+    }
+    if (incTs < prevTs) continue
+    // incTs == prevTs: tie-break
+    if (incBy >= prevBy) {
       ;(tasks as any)[id] = it
     }
   }
@@ -325,7 +342,7 @@ export async function collabRoutes(app: FastifyInstance) {
     }
     // Advance rev safely even if client claims a higher number.
     st.rev = Math.max(st.rev, Number.isFinite(incomingRev) ? incomingRev : st.rev) + 1
-    st.graph = applyDeletions(mergeGraph(st.graph, graph), deletedTaskIds)
+    st.graph = applyDeletions(mergeGraph(st.graph, { ...(graph as any), __stamp: st.rev } as any), deletedTaskIds)
 
     try {
       await prisma.snapshot.create({
@@ -443,7 +460,7 @@ export async function collabRoutes(app: FastifyInstance) {
           // Advance rev safely even if client claims a higher number.
           st.rev = Math.max(st.rev, Number.isFinite(incomingRev) ? incomingRev : st.rev) + 1
           // Merge instead of replace to avoid wiping others' tasks when a stale/empty graph arrives.
-          st.graph = applyDeletions(mergeGraph(st.graph, graph), deletedTaskIds)
+          st.graph = applyDeletions(mergeGraph(st.graph, { ...(graph as any), __stamp: st.rev } as any), deletedTaskIds)
 
           // persist snapshot (best-effort)
           try {
