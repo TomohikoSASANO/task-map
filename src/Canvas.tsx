@@ -709,55 +709,65 @@ export const Canvas: React.FC = () => {
                 onNodesChange={(_) => { /* 内部ドラッグ描画は React Flow に任せ、候補判定は onNodeDrag 側で実施 */ }}
 
                 onNodeDragStop={(_, node) => {
-                    // snapshot for undo
-                    historyRef.current.push(snapshotGraph())
-                    setDragging(null)
-                    // 1) 位置確定（グループ対応）
-                    const selection = dragRef.current?.selection ?? [node.id]
-                    if (selection.length > 1) {
-                        const updates: Record<string, { x: number; y: number }> = {}
-                        selection.forEach((id) => {
-                            const pos = dragPosRef.current[id]
-                            if (pos) {
-                                updates[id] = { x: pos.x, y: pos.y }
-                                delete dragPosRef.current[id]
-                            }
-                        })
-                        if (Object.keys(updates).length) setPositions(updates)
-                        setDragVersion((v) => v + 1)
-                    } else {
-                        const finalPos = dragPosRef.current[node.id] ?? node.position
-                        setNodePosition(node.id, finalPos.x, finalPos.y)
-                        delete dragPosRef.current[node.id]
-                        setDragVersion((v) => v + 1)
-                    }
+                    // ReactFlow may call this after a remote sync removed the dragged node.
+                    // Be defensive: `node` can be undefined in that case.
+                    const rootId = (node as any)?.id ?? dragRef.current?.rootId ?? null
+                    try {
+                        // snapshot for undo
+                        historyRef.current.push(snapshotGraph())
+                        setDragging(null)
 
+                        if (!rootId) return
 
-                    // 2) グループドラッグ時はリンク作成を行わない（単独時のみ）
-                    const selection2 = dragRef.current?.selection ?? [node.id]
-                    if (selection2.length === 1) {
-                        const me = graph.tasks[node.id]
-                        if (me) {
-                            let nearestId = candidateId
-                            if (nearestId) {
-                                // 依存リンク作成: me -> nearest（既存逆方向を禁止）
-                                historyRef.current.push(JSON.parse(JSON.stringify(useAppStore.getState())))
-                                const tgt = graph.tasks[nearestId]
-                                const hasOpposite = tgt?.dependsOn.includes(me.id)
-                                if (!hasOpposite) linkPrecedence(me.id, nearestId)
-                                // 隣接スナップ（me を nearest の左側へ寄せる）
-                                const target = graph.tasks[nearestId]
-                                if (target) {
-                                    const gapX = 230
-                                    const pos = { x: target.position.x - gapX, y: target.position.y }
-                                    setPositions({ [me.id]: pos })
+                        // 1) 位置確定（グループ対応）
+                        const selection = dragRef.current?.selection?.filter(Boolean) ?? [rootId]
+                        if (selection.length > 1) {
+                            const updates: Record<string, { x: number; y: number }> = {}
+                            selection.forEach((id) => {
+                                const pos = dragPosRef.current[id]
+                                if (pos) {
+                                    updates[id] = { x: pos.x, y: pos.y }
+                                    delete dragPosRef.current[id]
                                 }
+                            })
+                            if (Object.keys(updates).length) setPositions(updates)
+                            setDragVersion((v) => v + 1)
+                        } else {
+                            // If we didn't track a dragPos (rare), fall back to node.position when available.
+                            const fallback = (node as any)?.position
+                            const finalPos = dragPosRef.current[rootId] ?? fallback
+                            if (finalPos && typeof finalPos.x === 'number' && typeof finalPos.y === 'number') {
+                                setNodePosition(rootId, finalPos.x, finalPos.y)
+                            }
+                            delete dragPosRef.current[rootId]
+                            setDragVersion((v) => v + 1)
+                        }
+
+                        // 2) グループドラッグ時はリンク作成を行わない（単独時のみ）
+                        const selection2 = dragRef.current?.selection?.filter(Boolean) ?? [rootId]
+                        if (selection2.length === 1 && candidateId) {
+                            const cur = useAppStore.getState()
+                            const me = (cur.tasks as any)?.[rootId]
+                            const target = (cur.tasks as any)?.[candidateId]
+                            if (me && target) {
+                                // 依存リンク作成: me -> candidate（既存逆方向を禁止）
+                                const hasOpposite = Array.isArray(target.dependsOn) && target.dependsOn.includes(me.id)
+                                if (!hasOpposite) linkPrecedence(me.id, candidateId)
+                                // 隣接スナップ（me を target の左側へ寄せる）
+                                const gapX = 230
+                                const tx = target.position?.x ?? 0
+                                const ty = target.position?.y ?? 0
+                                setPositions({ [me.id]: { x: tx - gapX, y: ty } })
                             }
                         }
+                    } finally {
+                        // Always cleanup transient drag state to avoid getting stuck.
+                        setCandidateId(null)
+                        setSourceId(null)
+                        dragRef.current = null
+                        if (rootId) addRipple(rootId)
+                        clearOldRipples()
                     }
-
-                    setCandidateId(null); setSourceId(null); dragRef.current = null
-                    addRipple(node.id); clearOldRipples()
                 }}
 
                 defaultViewport={{ x: 0, y: 0, zoom: 1.25 }}
