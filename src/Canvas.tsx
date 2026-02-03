@@ -55,6 +55,7 @@ export const Canvas: React.FC = () => {
     const recoverCountRef = useRef<number>(0)
     const prevTasksCountRef = useRef<number>(0)
     const tasksCount = Object.keys(graph.tasks || {}).length
+    const rfReadyRef = useRef(false)
 
 
     const snapshotGraph = () => {
@@ -72,6 +73,26 @@ export const Canvas: React.FC = () => {
         } catch { }
     }, [focusTaskId])
 
+    const scheduleFitView = (reason: string) => {
+        const now = Date.now()
+        if (now - lastAutoFitAtRef.current < 1500) return
+        lastAutoFitAtRef.current = now
+        const run = () => {
+            // Only fit after ReactFlow init + nodes exist (measured).
+            if (!rfReadyRef.current) return
+            if ((nodesLenRef.current ?? 0) <= 0) return
+            try { rf.fitView({ padding: 0.2, duration: 250 } as any) } catch { }
+        }
+        // Multi-pass: nodes are sometimes measured a tick later.
+        window.setTimeout(run, 180)
+        window.setTimeout(run, 650)
+        window.setTimeout(run, 1200)
+        // Optional debug
+        if (localStorage.getItem('taskmap-debug') === '1') {
+            console.log('[Canvas] scheduleFitView', { reason, nodes: nodesLenRef.current, tasksCount })
+        }
+    }
+
     // When collaboration reconnects, auto-fit once to avoid "everything disappeared" due to off-screen viewport.
     useEffect(() => {
         const was = prevConnectedRef.current
@@ -80,16 +101,7 @@ export const Canvas: React.FC = () => {
         if (!was && now) {
             const tcount = Object.keys(graph.tasks || {}).length
             if (tcount === 0) return
-            const nowTs = Date.now()
-            if (nowTs - lastAutoFitAtRef.current < 5000) return
-            lastAutoFitAtRef.current = nowTs
-            // Give ReactFlow time to mount/measure nodes; do 2 passes to be robust.
-            window.setTimeout(() => {
-                try { rf.fitView({ padding: 0.2, duration: 250 } as any) } catch { }
-            }, 150)
-            window.setTimeout(() => {
-                try { rf.fitView({ padding: 0.2, duration: 250 } as any) } catch { }
-            }, 650)
+            scheduleFitView('reconnect')
         }
     }, [collab.connected])
 
@@ -98,16 +110,7 @@ export const Canvas: React.FC = () => {
         const prev = prevTasksCountRef.current
         prevTasksCountRef.current = tasksCount
         if (prev === 0 && tasksCount > 0) {
-            const now = Date.now()
-            if (now - lastAutoFitAtRef.current < 2000) return
-            lastAutoFitAtRef.current = now
-            // Same: 2 passes so nodes are measured before fitting.
-            window.setTimeout(() => {
-                try { rf.fitView({ padding: 0.2, duration: 250 } as any) } catch { }
-            }, 150)
-            window.setTimeout(() => {
-                try { rf.fitView({ padding: 0.2, duration: 250 } as any) } catch { }
-            }, 650)
+            scheduleFitView('tasks_appeared')
         }
     }, [tasksCount])
 
@@ -160,6 +163,14 @@ export const Canvas: React.FC = () => {
 
     useEffect(() => {
         nodesLenRef.current = nodes.length
+    }, [nodes.length])
+
+    // If nodes become available after init (e.g. async graph load), fit once.
+    useEffect(() => {
+        if (!rfReadyRef.current) return
+        if (nodes.length <= 0) return
+        scheduleFitView('nodes_ready')
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [nodes.length])
 
     // Watchdog: sometimes ReactFlow DOM can become blank while store still has tasks.
@@ -629,13 +640,8 @@ export const Canvas: React.FC = () => {
                     sendPresence({ selectedIds: selectedIdsRef.current })
                 }}
                 onInit={(_) => {
-                    // 初期表示時: ノード計測前だと空に見えることがあるので遅延して2回フィット
-                    window.setTimeout(() => {
-                        try { rf.fitView({ padding: 0.2, duration: 200 } as any) } catch { }
-                    }, 120)
-                    window.setTimeout(() => {
-                        try { rf.fitView({ padding: 0.2, duration: 200 } as any) } catch { }
-                    }, 600)
+                    rfReadyRef.current = true
+                    scheduleFitView('init')
                     try {
                         const vp = (rf as any).toObject?.().viewport || (rf as any).getViewport?.()
                         if (vp) viewportRef.current = vp
