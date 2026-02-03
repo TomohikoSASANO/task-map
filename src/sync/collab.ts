@@ -97,6 +97,50 @@ function stripUiFieldsFromGraph(g: Graph): Graph {
   return { users: g.users || {}, tasks, rootTaskIds: Array.isArray(g.rootTaskIds) ? g.rootTaskIds : [] }
 }
 
+function taskVer(t: any): { at: number; by: string } {
+  const at0 = typeof t?.updatedAt === 'number' ? t.updatedAt : Number(t?.updatedAt)
+  const at = Number.isFinite(at0) ? at0 : 0
+  const by = typeof t?.updatedBy === 'string' ? t.updatedBy : ''
+  return { at, by }
+}
+
+function isNewerTask(incoming: any, current: any): boolean {
+  const a = taskVer(incoming)
+  const b = taskVer(current)
+  if (a.at > b.at) return true
+  if (a.at < b.at) return false
+  return a.by >= b.by
+}
+
+// Merge remote graph into local without rolling back newer local edits.
+// Also applies deletions when provided.
+function mergeGraphs(local: Graph, remote: Graph, deletedTaskIds?: string[]): Graph {
+  const tasks: Record<string, any> = { ...(local.tasks || {}) }
+  for (const [id, rt] of Object.entries(remote.tasks || {})) {
+    const lt = tasks[id]
+    if (!lt || isNewerTask(rt, lt)) tasks[id] = rt
+  }
+  if (Array.isArray(deletedTaskIds) && deletedTaskIds.length) {
+    for (const id of deletedTaskIds) delete tasks[id]
+  }
+  // Rebuild children from parentId for safety (prevents inconsistent UI after merges/deletes)
+  for (const id of Object.keys(tasks)) {
+    if (tasks[id] && typeof tasks[id] === 'object') tasks[id] = { ...tasks[id], children: [] }
+  }
+  for (const id of Object.keys(tasks)) {
+    const t = tasks[id]
+    const pid = typeof t?.parentId === 'string' && t.parentId ? t.parentId : null
+    if (pid && tasks[pid]) {
+      tasks[pid].children.push(id)
+    } else {
+      t.parentId = pid && !tasks[pid] ? null : pid
+    }
+  }
+  const derivedRoots = Object.keys(tasks).filter((id) => !tasks[id]?.parentId)
+  const rootTaskIds = Array.from(new Set([...(remote.rootTaskIds || []), ...derivedRoots])).filter((id) => !!tasks[id])
+  return { users: remote.users || local.users || {}, tasks, rootTaskIds }
+}
+
 function wsBase(): string {
   const base = apiBase()
   if (base) {
@@ -189,7 +233,10 @@ export function useCollab() {
             return
           }
           ignoreNextRef.current = true
-          useAppStore.getState().setGraph(remote)
+          {
+            const merged = mergeGraphs({ tasks: local.tasks as any, users: local.users as any, rootTaskIds: local.rootTaskIds as any }, remote)
+            useAppStore.getState().setGraph(merged as any)
+          }
           // Set baseline to remote graph ids so subsequent deletions are detected.
           lastLocalIdsRef.current = new Set(Object.keys(remote.tasks || {}))
           pendingDeletedIdsRef.current.clear()
@@ -397,7 +444,11 @@ export function useCollab() {
               maybeBootstrapLocalToServer()
             } else {
               ignoreNextRef.current = true
-              useAppStore.getState().setGraph(remote)
+              {
+                const cur = useAppStore.getState()
+                const merged = mergeGraphs({ tasks: cur.tasks as any, users: cur.users as any, rootTaskIds: cur.rootTaskIds as any }, remote)
+                useAppStore.getState().setGraph(merged as any)
+              }
               lastLocalIdsRef.current = new Set(Object.keys(remote.tasks || {}))
               pendingDeletedIdsRef.current.clear()
             }
@@ -446,7 +497,15 @@ export function useCollab() {
             }
 
             ignoreNextRef.current = true
-            useAppStore.getState().setGraph(msg.graph as Graph)
+            {
+              const cur = useAppStore.getState()
+              const merged = mergeGraphs(
+                { tasks: cur.tasks as any, users: cur.users as any, rootTaskIds: cur.rootTaskIds as any },
+                msg.graph as Graph,
+                Array.isArray(msg.deletedTaskIds) ? (msg.deletedTaskIds as string[]) : undefined,
+              )
+              useAppStore.getState().setGraph(merged as any)
+            }
             lastLocalIdsRef.current = new Set(Object.keys(((msg.graph as Graph).tasks as any) || {}))
             pendingDeletedIdsRef.current.clear()
           }

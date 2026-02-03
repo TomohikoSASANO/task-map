@@ -48,6 +48,8 @@ export const Canvas: React.FC = () => {
     const presencePeers = collab.peers
     const holdDragRef = useRef<{ id: string; dx: number; dy: number } | null>(null)
     const lastAutoFitAtRef = useRef<number>(0)
+    const lastUserInteractAtRef = useRef<number>(0)
+    const autoCenterDoneRef = useRef<boolean>(false)
     const prevConnectedRef = useRef<boolean>(false)
     const [rfMountKey, setRfMountKey] = useState(0)
     const nodesLenRef = useRef<number>(0)
@@ -76,6 +78,12 @@ export const Canvas: React.FC = () => {
     const scheduleFitView = (reason: string) => {
         const now = Date.now()
         if (now - lastAutoFitAtRef.current < 1500) return
+        // Don't auto-center while user is interacting (prevents \"勝手に戻る\")
+        if (now - lastUserInteractAtRef.current < 8000) return
+        if (isKeyPanning || isMiddlePanning) return
+        if (useAppStore.getState().draggingId) return
+        // Do it only once per session unless reconnect explicitly requests it
+        if (autoCenterDoneRef.current && reason !== 'reconnect') return
         lastAutoFitAtRef.current = now
         const run = () => {
             // Only fit after ReactFlow init + nodes exist (measured).
@@ -100,7 +108,18 @@ export const Canvas: React.FC = () => {
                 const cx = (minX + maxX) / 2
                 const cy = (minY + maxY) / 2
                 const currentZoom = viewportRef.current.zoom
+                // If the content is already near the viewport center, skip.
+                const el = containerRef.current
+                if (el) {
+                    const rect = el.getBoundingClientRect()
+                    const vc = viewportRef.current
+                    const viewCx = (rect.width / 2 - vc.x) / (vc.zoom || 1)
+                    const viewCy = (rect.height / 2 - vc.y) / (vc.zoom || 1)
+                    const dist = Math.hypot(cx - viewCx, cy - viewCy)
+                    if (dist < 400) return
+                }
                 rf.setCenter(cx, cy, { zoom: currentZoom, duration: 250 } as any)
+                autoCenterDoneRef.current = true
             } catch { }
         }
         // Multi-pass: nodes are sometimes measured a tick later.
@@ -112,6 +131,24 @@ export const Canvas: React.FC = () => {
             console.log('[Canvas] scheduleFitView', { reason, nodes: nodesLenRef.current, tasksCount })
         }
     }
+
+    // Track user interactions to suppress auto-centering while they operate.
+    useEffect(() => {
+        const el = containerRef.current
+        if (!el) return
+        const mark = () => { lastUserInteractAtRef.current = Date.now() }
+        const onWheel = () => mark()
+        const onPointerDown = () => mark()
+        const onKeyDown = () => mark()
+        el.addEventListener('wheel', onWheel, { passive: true } as any)
+        el.addEventListener('pointerdown', onPointerDown, { passive: true } as any)
+        window.addEventListener('keydown', onKeyDown, { passive: true } as any)
+        return () => {
+            el.removeEventListener('wheel', onWheel as any)
+            el.removeEventListener('pointerdown', onPointerDown as any)
+            window.removeEventListener('keydown', onKeyDown as any)
+        }
+    }, [])
 
     // When collaboration reconnects, auto-fit once to avoid "everything disappeared" due to off-screen viewport.
     useEffect(() => {

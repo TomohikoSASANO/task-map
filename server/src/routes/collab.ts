@@ -355,7 +355,7 @@ export async function collabRoutes(app: FastifyInstance) {
     }
 
     // Broadcast to connected peers (best-effort).
-    const stateMsg = { type: 'state', rev: st.rev, graph: st.graph, from: clientId ?? 'http' }
+    const stateMsg = { type: 'state', rev: st.rev, graph: st.graph, deletedTaskIds, from: clientId ?? 'http' }
     broadcast(mapKey, stateMsg)
     return reply.send({ ok: true, accepted: true, rev: st.rev })
   })
@@ -475,7 +475,7 @@ export async function collabRoutes(app: FastifyInstance) {
 
           // IMPORTANT: also notify the sender so it can advance its local rev.
           // Without this, single-user edits can get stuck once the sender's rev lags behind.
-          const stateMsg = { type: 'state', rev: st.rev, graph: st.graph, from: clientId }
+          const stateMsg = { type: 'state', rev: st.rev, graph: st.graph, deletedTaskIds, from: clientId }
           wsSend(ws, stateMsg)
           broadcast(mapKey, stateMsg, clientId)
           return
